@@ -130,7 +130,8 @@ UnityPilot MCP — Windows 离线安装包
      重命名为 mcp.json
 
 三、Unity 插件
-  Assets/SkillEditor/Editor/UnityPilot/ 目录已包含在项目中。
+  在 Unity 工程的 Packages/manifest.json 中添加 UPM 依赖（与仓库 README 一致），例如：
+  "io.github.codingriver.unitypilot-editor": "https://github.com/codingriver/unitypilot.git?path=/unitypilot-editor"
   菜单 → SkillEditor → 启用 UnityPilot（勾选）
 
 四、验证
@@ -166,6 +167,8 @@ UnityPilot MCP — macOS 离线安装包
      cp mcp-configs/vscode.mcp.json <Unity项目根>/.vscode/mcp.json
 
 三、Unity 插件
+  在 Unity 工程的 Packages/manifest.json 中添加 UPM 依赖，例如：
+  "io.github.codingriver.unitypilot-editor": "https://github.com/codingriver/unitypilot.git?path=/unitypilot-editor"
   菜单 → SkillEditor → 启用 UnityPilot（勾选）
 
 四、验证

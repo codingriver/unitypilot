@@ -20,8 +20,9 @@
 ## 1. 项目结构
 
 ```text
-unitypilot_mcp/
-  src/unitypilot_mcp/     # Python 源码（全部脚本与模块）
+<仓库根>/
+  unitypilot-editor/      # Unity UPM 包（package.json + Editor/ C# 插件）
+  src/unitypilot_mcp/     # Python 源码
     __init__.py
     mcp_main.py           # CLI 入口（_cli 函数）
     mcp_stdio_server.py   # FastMCP 工具定义 + WS 服务器生命周期
@@ -33,8 +34,9 @@ unitypilot_mcp/
     dev.bat / dev.sh
     restart_mcp.bat / restart_mcp.sh
     resources/            # 部署资源（如历史发布包等）
-run_unitypilot_mcp.py     # 开发期直接运行脚本（位于 unitypilot_mcp/ 目录）
-pyproject.toml            # 包元数据（位于项目根，路径 `../pyproject.toml`）
+  run_unitypilot_mcp.py   # 开发期直接运行脚本
+  pyproject.toml          # Python 包元数据
+  UnityPilot/             # 可选：示例 Unity 工程（本地 file: 引用 unitypilot-editor）
 ```
 
 **通信架构：**
@@ -403,18 +405,29 @@ VSCode 通过 GitHub Copilot 扩展（需 1.99+）支持 MCP，配置格式与 C
 
 ## 8. Unity 侧配置
 
-### 8.1 安装插件
+### 8.1 安装插件（UPM，推荐）
 
-将以下目录复制到目标 Unity 项目：
+本仓库即 UPM 包来源：包根目录为 `unitypilot-editor/`（内含 `package.json`），与 GitHub 远程一致。
 
-```text
-Assets/SkillEditor/Editor/UnityPilot/
-  UnityPilotBootstrap.cs
-  UnityPilotBridge.cs
-  UnityPilotCompileService.cs
-  UnityPilotProtocol.cs
-  UnityPilotStatusWindow.cs
+在目标 Unity 工程的 `Packages/manifest.json` 的 `dependencies` 中加入：
+
+```json
+"io.github.codingriver.unitypilot-editor": "https://github.com/codingriver/unitypilot.git?path=/unitypilot-editor"
 ```
+
+固定版本时使用 Git 标签（示例）：
+
+```json
+"io.github.codingriver.unitypilot-editor": "https://github.com/codingriver/unitypilot.git?path=/unitypilot-editor#v0.1.0"
+```
+
+在本 monorepo 内开发 `UnityPilot` 示例工程时，使用本地嵌入路径（与上式为**同一份源码**）：
+
+```json
+"io.github.codingriver.unitypilot-editor": "file:../../unitypilot-editor"
+```
+
+保存后由 Unity Package Manager 解析；无需再复制 `Assets/.../UnityPilot` 目录。
 
 ### 8.2 启用
 

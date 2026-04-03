@@ -1,0 +1,7 @@
+{
+	"name": "UnityPilot.Editor",
+	"rootNamespace": "SkillEditor.Editor.UnityPilot",
+	"includePlatforms": [
+		"Editor"
+	]
+}
