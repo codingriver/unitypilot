@@ -1,10 +1,15 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 using System.IO;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     /// <summary>
     /// 将 UnityPilot 编辑器日志写入项目根目录下 <c>logs/unitypilot-editor.log</c>。

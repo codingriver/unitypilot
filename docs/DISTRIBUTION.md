@@ -302,14 +302,14 @@ Claude Code 通过项目根目录的 `.mcp.json` 自动加载服务器。
   "mcpServers": {
     "unitypilot": {
       "command": "python",
-      "args": ["d:/SkillEditor/unitypilot_mcp/run_unitypilot_mcp.py"],
+      "args": ["d:/path/to/unitypilot/run_unitypilot_mcp.py"],
       "env": { "PYTHONUTF8": "1" }
     }
   }
 }
 ```
 
-> macOS：`"command": "python3"`，路径改为 `/Users/name/SkillEditor/unitypilot_mcp/run_unitypilot_mcp.py`
+> macOS：`"command": "python3"`，路径改为 `/Users/name/path/to/unitypilot/run_unitypilot_mcp.py`
 
 **验证：**
 
@@ -349,7 +349,7 @@ claude mcp list
   "mcpServers": {
     "unitypilot": {
       "command": "python3",
-      "args": ["/Users/name/SkillEditor/unitypilot_mcp/run_unitypilot_mcp.py"]
+      "args": ["/Users/name/path/to/unitypilot/run_unitypilot_mcp.py"]
     }
   }
 }
@@ -431,14 +431,14 @@ VSCode 通过 GitHub Copilot 扩展（需 1.99+）支持 MCP，配置格式与 C
 
 ### 8.2 启用
 
-Unity 菜单 → **SkillEditor → 启用 UnityPilot**（勾选）
+Unity 菜单 → **UnityPilot** 相关项中启用 UnityPilot（勾选）
 
 ### 8.3 连接顺序
 
 ```text
 1. 启动 AI 工具 → MCP 服务器自动启动，监听 ws://127.0.0.1:8765
 2. 打开 Unity → UnityPilot 插件自动连接
-3. 菜单 SkillEditor → UnityPilot 状态监控 → 显示"已连接"
+3. 菜单 **UnityPilot/UnityPilot**（状态窗口）→ 显示"已连接"
 ```
 
 > MCP 服务器必须先于 Unity 启动。Unity 是 WebSocket 客户端，Python 是服务端。
@@ -450,7 +450,7 @@ Unity 菜单 → **SkillEditor → 启用 UnityPilot**（勾选）
 ### 9.1 冒烟测试（无需 Unity）
 
 ```bash
-cd /path/to/SkillEditor/unitypilot_mcp
+cd /path/to/unitypilot
 python src/unitypilot_mcp/mcp_smoke_test.py
 
 # 期望输出：

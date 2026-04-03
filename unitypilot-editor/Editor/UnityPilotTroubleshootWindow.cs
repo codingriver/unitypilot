@@ -1,7 +1,12 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using UnityEditor;
 using UnityEngine;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     /// <summary>
     /// 可复制的排查说明（独立弹窗）。

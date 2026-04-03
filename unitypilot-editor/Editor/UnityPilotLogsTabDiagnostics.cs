@@ -1,7 +1,12 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 using UnityEngine;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     /// <summary>
     /// 供 MCP resource 读取：诊断日志标签页的最近一次布局参数（主线程写入）。

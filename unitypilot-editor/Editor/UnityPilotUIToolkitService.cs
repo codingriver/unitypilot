@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using UnityEngine;
 using UnityEditor;
 using UnityEngine.UIElements;
@@ -8,7 +13,7 @@ using System.Threading.Tasks;
 using System.Linq;
 using System.Text;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     internal sealed class UnityPilotUIToolkitService
     {

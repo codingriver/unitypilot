@@ -1,10 +1,15 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor;
 using UnityEngine;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     /// <summary>
     /// 全窗口级布局诊断：每一区域的宽度、内容最大宽度、横向溢出检测；

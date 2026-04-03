@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -12,7 +17,7 @@ using UnityEditor.Compilation;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     // ── Status snapshot returned to the status window ──────────────────────────
     internal struct BridgeStatus

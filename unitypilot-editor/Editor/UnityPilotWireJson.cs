@@ -1,6 +1,11 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     /// <summary>
     /// 通信日志：从完整 JSON 中优先取出 payload；若无则退回原文（避免误伤嵌套字段）。

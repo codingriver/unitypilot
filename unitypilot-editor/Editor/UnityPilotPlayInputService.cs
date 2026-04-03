@@ -1,10 +1,15 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UIElements;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     internal sealed class UnityPilotPlayInputService
     {
@@ -233,7 +238,7 @@ namespace SkillEditor.Editor.UnityPilot
             var byShort = all.FirstOrDefault(w => w.GetType().Name == typeName);
             if (byShort != null) return byShort;
 
-            // 3. Full type name (e.g. "SkillEditor.Editor.SkillEditorWindow")
+            // 3. Full type name (e.g. "MyNamespace.MyEditorWindow")
             var byFull = all.FirstOrDefault(w =>
                 string.Equals(w.GetType().FullName, targetWindow, StringComparison.Ordinal));
             if (byFull != null) return byFull;

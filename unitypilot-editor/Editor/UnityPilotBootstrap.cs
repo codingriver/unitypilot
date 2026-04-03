@@ -1,11 +1,16 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using UnityEditor;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     [InitializeOnLoad]
     internal static class UnityPilotBootstrap
     {
-        internal const string EnabledPrefKey = "SkillEditor.UnityPilot.Enabled";
+        internal const string EnabledPrefKey = "codingriver.unity.pilot.BridgeEnabled";
 
         internal static bool IsEnabled
         {

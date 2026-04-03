@@ -104,8 +104,8 @@ chmod +x deploy/dev.sh && ./deploy/dev.sh
 
 ```bash
 # 1. 克隆/进入项目目录
-cd d:/SkillEditor/unitypilot_mcp           # Windows
-cd /Users/name/SkillEditor/unitypilot_mcp  # macOS
+cd d:/path/to/unitypilot           # Windows
+cd /Users/name/path/to/unitypilot  # macOS
 
 # 2. 安装依赖（editable 模式，修改源码无需重装）
 pip install -e ..            # Windows
@@ -453,7 +453,7 @@ ls dist/
 
 检查 Unity 控制台是否有错误。Unity 侧的重连间隔约 2–6 秒，最多等待 10 秒。若超时：
 
-1. Unity 菜单 → **SkillEditor → UnityPilot 状态监控**，点击"重新连接"按钮
+1. Unity 菜单 → **UnityPilot/UnityPilot**（状态窗口），点击"重新连接"按钮
 2. 或重启 Unity Editor（会在启动时自动连接）
 
 ### Q: 停止服务器后端口仍显示占用（Windows）

@@ -1,6 +1,6 @@
 {
 	"name": "UnityPilot.Editor",
-	"rootNamespace": "SkillEditor.Editor.UnityPilot",
+	"rootNamespace": "codingriver.unity.pilot",
 	"includePlatforms": [
 		"Editor"
 	]

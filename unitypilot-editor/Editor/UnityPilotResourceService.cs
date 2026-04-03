@@ -1,3 +1,8 @@
+// -----------------------------------------------------------------------
+// UnityPilot Editor — https://github.com/codingriver/unitypilot
+// SPDX-License-Identifier: MIT
+// -----------------------------------------------------------------------
+
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -9,7 +14,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using PackageInfo = UnityEditor.PackageManager.PackageInfo;
 
-namespace SkillEditor.Editor.UnityPilot
+namespace codingriver.unity.pilot
 {
     // ── DTOs ────────────────────────────────────────────────────────────────────
 
