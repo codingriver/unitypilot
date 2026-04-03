@@ -1,0 +1,55 @@
+# --- Python / MCP ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+.env
+.env.*
+!.env.example
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Logs ---
+*.log
+
+# --- OS / IDE ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+*.swo
+
+# --- Unity (UnityPilot/) ---
+UnityPilot/[Ll]ibrary/
+UnityPilot/[Tt]emp/
+UnityPilot/[Oo]bj/
+UnityPilot/[Bb]uild/
+UnityPilot/[Bb]uilds/
+UnityPilot/[Ll]ogs/
+UnityPilot/[Uu]ser[Ss]ettings/
+UnityPilot/[Mm]emoryCaptures/
+UnityPilot/[Rr]ecordings/
+UnityPilot/.idea/
+UnityPilot/*.csproj
+UnityPilot/*.csproj.user
+UnityPilot/*.sln
+UnityPilot/*.suo
+UnityPilot/*.user
+UnityPilot/*.userprefs
+UnityPilot/*.pidb
+UnityPilot/*.booproj
+UnityPilot/*.svd
+UnityPilot/*.pdb
+UnityPilot/*.mdb
+UnityPilot/*.opendb
+UnityPilot/*.VC.db

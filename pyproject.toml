@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "unitypilot-mcp"
+version = "0.1.0"
+description = "Unity Editor MCP bridge — lets AI tools control Unity via WebSocket"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["unity", "mcp", "editor", "ai", "game-dev"]
+dependencies = [
+    "mcp>=1.26.0",
+    "websockets>=12.0",
+]
+
+[project.scripts]
+unitypilot-mcp = "unitypilot_mcp.mcp_main:_cli"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["unitypilot_mcp*"]

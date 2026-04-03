@@ -1,0 +1,398 @@
+using System;
+using System.Collections.Generic;
+
+namespace SkillEditor.Editor.UnityPilot
+{
+    [Serializable]
+    internal class BridgeEnvelope
+    {
+        public string id;
+        public string type;
+        public string name;
+        public string sessionId;
+        public string protocolVersion = "1.0";
+        public long timestamp;
+    }
+
+    [Serializable]
+    internal class HelloPayload
+    {
+        public string unityVersion;
+        public string projectPath;
+        public string platform;
+    }
+
+    [Serializable]
+    internal class HeartbeatPayload { }
+
+    [Serializable]
+    internal class HelloMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public HelloPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion = "1.0";
+    }
+
+    [Serializable]
+    internal class HeartbeatMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public HeartbeatPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion = "1.0";
+    }
+
+    [Serializable]
+    internal class ResultMessage<TPayload>
+    {
+        public string id;
+        public string type = "result";
+        public string name;
+        public TPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion = "1.0";
+    }
+
+    [Serializable]
+    internal class EventMessage<TPayload>
+    {
+        public string id;
+        public string type = "event";
+        public string name;
+        public TPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion = "1.0";
+    }
+
+    [Serializable]
+    internal class ErrorDetailPayload
+    {
+        public string commandId;
+        public string commandName;
+    }
+
+    [Serializable]
+    internal class ErrorPayload
+    {
+        public string code;
+        public string message;
+        public ErrorDetailPayload detail;
+    }
+
+    [Serializable]
+    internal class ErrorMessage
+    {
+        public string id;
+        public string type = "error";
+        public string name;
+        public ErrorPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion = "1.0";
+    }
+
+    [Serializable]
+    internal class CompileRequestMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public CompileRequestPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class CompileRequestPayload
+    {
+        public string requestId;
+    }
+
+    [Serializable]
+    internal class CompileAcceptedPayload
+    {
+        public bool accepted;
+        public string compileRequestId;
+    }
+
+    [Serializable]
+    internal class CompileStatusPayload
+    {
+        public string requestId;
+        public string status;
+        public int errorCount;
+        public int warningCount;
+        public long startedAt;
+        public long finishedAt;
+    }
+
+    [Serializable]
+    internal class CompileErrorItemPayload
+    {
+        public string file;
+        public int line;
+        public int column;
+        public string message;
+        public string severity;
+    }
+
+    [Serializable]
+    internal class CompileErrorsPayload
+    {
+        public string requestId;
+        public int total;
+        public List<CompileErrorItemPayload> errors = new();
+    }
+
+    [Serializable]
+    internal class PlayModeSetMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public PlayModeSetPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class PlayModeSetPayload
+    {
+        public string action;
+    }
+
+    [Serializable]
+    internal class PlayModeChangedPayload
+    {
+        public string state;
+    }
+
+    [Serializable]
+    internal class EditorStatePayload
+    {
+        public bool connected;
+        public bool isCompiling;
+        public string playModeState;
+        public string activeScene;
+    }
+
+    [Serializable]
+    internal class MouseEventMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public MouseEventPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class MouseEventPayload
+    {
+        public string targetWindow;
+        public string action;
+        public string button;
+        public float x;
+        public float y;
+        public string[] modifiers;
+        public float scrollDeltaX;
+        public float scrollDeltaY;
+    }
+
+    [Serializable]
+    internal class GenericOkPayload
+    {
+        public bool ok;
+        public string state;
+        public string status;
+    }
+
+    [Serializable]
+    internal class GenericOkEnvelope
+    {
+        public string id;
+        public string type;
+        public string name;
+        public GenericOkPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class KeyboardEventMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public KeyboardEventPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class KeyboardEventPayload
+    {
+        public string targetWindow;
+        public string action;    // keydown, keyup, keypress, type
+        public string keyCode;   // Unity KeyCode name (e.g. "A", "Return", "Space")
+        public char character;   // single character (for keydown with specific char)
+        public string text;      // text to type (for "type" action)
+        public string[] modifiers; // shift, ctrl/control, alt, cmd/command
+    }
+
+    [Serializable]
+    internal class UIToolkitDumpMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public UIToolkitDumpPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class UIToolkitDumpPayload
+    {
+        public string targetWindow;
+        public int maxDepth = 10;
+    }
+
+    [Serializable]
+    internal class UIToolkitQueryMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public UIToolkitQueryPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class UIToolkitQueryPayload
+    {
+        public string targetWindow;
+        public string nameFilter;
+        public string classFilter;
+        public string typeFilter;
+        public string textFilter;
+    }
+
+    [Serializable]
+    internal class UIToolkitEventMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public UIToolkitEventPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class UIToolkitEventPayload
+    {
+        public string targetWindow;
+        public string eventType;
+        public string elementName;
+        public int elementIndex = -1;
+        public string keyCode;
+        public string character;
+        public int mouseButton;
+        public float mouseX;
+        public float mouseY;
+        public string[] modifiers;
+    }
+
+    [Serializable]
+    internal class UIToolkitElementInfo
+    {
+        public int index;
+        public int parentIndex;
+        public int depth;
+        public string typeName;
+        public string name;
+        public string classes;
+        public float worldBoundX;
+        public float worldBoundY;
+        public float worldBoundWidth;
+        public float worldBoundHeight;
+        public bool visible;
+        public bool enabled;
+        public int childCount;
+        public string text;
+    }
+
+    [Serializable]
+    internal class UIToolkitDumpResultPayload
+    {
+        public bool ok;
+        public string targetWindow;
+        public int totalElements;
+        public List<UIToolkitElementInfo> elements = new();
+    }
+
+    [Serializable]
+    internal class UIToolkitQueryResultPayload
+    {
+        public bool ok;
+        public int matchCount;
+        public List<UIToolkitElementInfo> matches = new();
+    }
+
+    [Serializable]
+    internal class DragDropMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public DragDropPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class DragDropPayload
+    {
+        public string sourceWindow;
+        public string targetWindow;
+        public string dragType;       // "asset", "gameobject", "custom"
+        public float fromX;
+        public float fromY;
+        public float toX;
+        public float toY;
+        public string[] assetPaths;   // for dragType="asset"
+        public int[] gameObjectIds;   // for dragType="gameobject"
+        public string customData;     // for dragType="custom"
+        public string[] modifiers;
+    }
+
+    [Serializable]
+    internal class DragDropResultPayload
+    {
+        public bool ok;
+        public string state;
+        public string dragType;
+        public string visualMode;     // DragAndDrop.visualMode.ToString()
+    }
+}
