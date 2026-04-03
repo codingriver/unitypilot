@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -27,11 +29,19 @@ class AutoFixSnapshot:
 
 
 class AutoFixLoopService:
-    def __init__(self, dispatcher: CommandDispatcher, state: StateStore, patch_service: PatchApplyService, planner: CompileFixPlanner) -> None:
+    def __init__(
+        self,
+        dispatcher: CommandDispatcher,
+        state: StateStore,
+        patch_service: PatchApplyService,
+        planner: CompileFixPlanner,
+        post_patch_sync: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
         self.dispatcher = dispatcher
         self.state = state
         self.patch_service = patch_service
         self.planner = planner
+        self._post_patch_sync = post_patch_sync
         self._task: asyncio.Task | None = None
         self._stop_requested = False
 
@@ -122,6 +132,14 @@ class AutoFixLoopService:
                 loop.last_error = "补丁执行失败"
                 loop.finished_at = now_ms()
                 return
+
+            if self._post_patch_sync is not None:
+                try:
+                    await self._post_patch_sync()
+                except Exception as ex:  # noqa: BLE001
+                    logging.getLogger("unitypilot.auto_fix").warning(
+                        "post_patch_sync failed: %s", ex
+                    )
 
         loop.status = "max_reached"
         loop.finished_at = now_ms()

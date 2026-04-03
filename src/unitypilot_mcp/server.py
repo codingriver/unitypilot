@@ -17,6 +17,8 @@ logger = logging.getLogger("unitypilot.server")
 
 
 class WsOrchestratorServer(WsTransport):
+    DOMAIN_RELOAD_TIMEOUT_S = 60  # max seconds to wait for Unity to reconnect after domain reload
+
     def __init__(self, host: str = "127.0.0.1", port: int = 8765, heartbeat_interval_ms: int = 2000) -> None:
         self.host = host
         self.port = port
@@ -25,6 +27,9 @@ class WsOrchestratorServer(WsTransport):
         self.state = StateStore()
         self._ws: WebSocketServerProtocol | None = None
         self._pending: dict[str, asyncio.Future] = {}
+        self._suspended: dict[str, asyncio.Future] = {}  # pending commands suspended during domain reload
+        self._domain_reloading = False
+        self._reconnect_event = asyncio.Event()
         self._server = None
         self._stop_event = asyncio.Event()
 
@@ -94,6 +99,11 @@ class WsOrchestratorServer(WsTransport):
         remote = websocket.remote_address
         logger.info("Unity client connected from %s", remote)
         self._ws = websocket
+        # If we were in domain reload suspension, signal reconnect
+        if self._domain_reloading:
+            logger.info("Unity reconnected during domain reload — resuming suspended commands")
+            self._domain_reloading = False
+            self._reconnect_event.set()
         heartbeat_task = asyncio.create_task(self._heartbeat_loop())
         try:
             async for raw in websocket:
@@ -107,18 +117,27 @@ class WsOrchestratorServer(WsTransport):
             session_id = self.session_manager.active.session_id if self.session_manager.active else "unknown"
             logger.info("[%s] Unity client disconnected from %s", session_id[:12], remote)
             self.session_manager.disconnect()
-            self._fail_all_pending("CONNECTION_LOST", "Unity 连接断开")
-            # Mark compile state unreliable on disconnect
+            if self._domain_reloading:
+                # Domain reload in progress: move pending to suspended, don't fail them
+                logger.info("[%s] Disconnect during domain reload — suspending %d pending commands", session_id[:12], len(self._pending))
+                self._suspended.update(self._pending)
+                self._pending.clear()
+            else:
+                self._fail_all_pending("CONNECTION_LOST", "Unity 连接断开")
             if self.state.compile.status == "compiling":
                 self.state.compile.status = "unknown"
                 self.state.compile.errors = []
 
     async def _handle_message(self, message) -> None:
         if message.type == "hello" and message.name == "session.hello":
-            # Fail pending commands from any previous session before accepting new one
-            if self._pending:
+            # If we have suspended commands from domain reload, restore them to pending
+            if self._suspended:
+                logger.info("[%s] Restoring %d suspended commands after domain reload",
+                            message.session_id[:12], len(self._suspended))
+                self._pending.update(self._suspended)
+                self._suspended.clear()
+            elif self._pending:
                 self._fail_all_pending("SESSION_REPLACED", "Unity 会话已替换，请重试命令")
-            # Reset compile state — stale snapshot from previous session is unreliable
             self.state.compile = CompileSnapshot()
             self.session_manager.on_hello(message.session_id, message.payload)
             logger.info(
@@ -168,6 +187,13 @@ class WsOrchestratorServer(WsTransport):
                 message.name,
                 json.dumps(message.payload, ensure_ascii=False) if message.payload else "{}",
             )
+            if message.name == "domain_reload.starting":
+                logger.info("[%s] Domain reload starting — entering suspension mode", message.session_id[:12] if message.session_id else "?")
+                self._domain_reloading = True
+                self._reconnect_event.clear()
+                # Start a background task to timeout suspension
+                asyncio.create_task(self._domain_reload_timeout())
+                return
             if message.name == "compile.status":
                 self.state.update_compile_status(message.payload)
             elif message.name == "compile.errors":
@@ -176,6 +202,28 @@ class WsOrchestratorServer(WsTransport):
                 self.state.update_editor_state(message.payload)
             elif message.name == "playmode.changed":
                 self.state.editor.play_mode_state = str(message.payload.get("state", self.state.editor.play_mode_state))
+
+    async def _domain_reload_timeout(self) -> None:
+        """If Unity doesn't reconnect within timeout, fail all suspended commands."""
+        try:
+            await asyncio.wait_for(self._reconnect_event.wait(), timeout=self.DOMAIN_RELOAD_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            if self._suspended:
+                logger.warning("Domain reload timeout (%ds) — failing %d suspended commands",
+                               self.DOMAIN_RELOAD_TIMEOUT_S, len(self._suspended))
+                for fut in self._suspended.values():
+                    if not fut.done():
+                        fut.set_result({
+                            "id": "",
+                            "type": "error",
+                            "name": "domain_reload_timeout",
+                            "payload": {"code": "DOMAIN_RELOAD_TIMEOUT", "message": "Unity 域重载超时，未能重连"},
+                            "timestamp": now_ms(),
+                            "sessionId": "",
+                            "protocolVersion": PROTOCOL_VERSION,
+                        })
+                self._suspended.clear()
+            self._domain_reloading = False
 
     async def _heartbeat_loop(self) -> None:
         while True:

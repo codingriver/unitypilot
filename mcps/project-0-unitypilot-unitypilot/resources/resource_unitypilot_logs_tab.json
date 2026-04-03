@@ -1,0 +1,6 @@
+{
+  "uri": "unity://diagnostics/unitypilot-logs-tab",
+  "name": "resource_unitypilot_logs_tab",
+  "description": "UnityPilot 诊断日志标签页布局快照（横向滚动风险等）。",
+  "mimeType": "text/plain"
+}

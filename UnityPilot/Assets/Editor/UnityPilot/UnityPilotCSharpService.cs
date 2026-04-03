@@ -324,7 +324,6 @@ namespace SkillEditor.Editor.UnityPilot
         {
             try
             {
-                // Wrap user code in a class with a static method
                 string wrappedCode = @"
 using System;
 using System.Collections.Generic;
@@ -342,7 +341,6 @@ public static class __CSharpEval {
                 var compileMethod = providerType.GetMethod("CompileAssemblyFromSource");
                 if (compileMethod == null) return "Error: CompileAssemblyFromSource not found.";
 
-                // Create compiler parameters via reflection
                 var paramsType = FindType("System.CodeDom.Compiler.CompilerParameters");
                 if (paramsType == null) return "Error: CompilerParameters not found.";
 
@@ -350,11 +348,7 @@ public static class __CSharpEval {
                 var refAssemblies = paramsType.GetProperty("ReferencedAssemblies")?.GetValue(compParams) as System.Collections.IList;
                 if (refAssemblies != null)
                 {
-                    refAssemblies.Add("System.dll");
-                    refAssemblies.Add("System.Core.dll");
-                    // Add Unity assemblies
-                    refAssemblies.Add(typeof(UnityEngine.Object).Assembly.Location);
-                    refAssemblies.Add(typeof(UnityEditor.Editor).Assembly.Location);
+                    CollectAssemblyReferences(refAssemblies);
                 }
                 paramsType.GetProperty("GenerateInMemory")?.SetValue(compParams, true);
 
@@ -380,6 +374,32 @@ public static class __CSharpEval {
             catch (TargetInvocationException tie)
             {
                 throw tie.InnerException ?? tie;
+            }
+        }
+
+        private static void CollectAssemblyReferences(System.Collections.IList refAssemblies)
+        {
+            var added = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                if (asm.IsDynamic) continue;
+                try
+                {
+                    var loc = asm.Location;
+                    if (string.IsNullOrEmpty(loc)) continue;
+                    if (!added.Add(loc)) continue;
+                    refAssemblies.Add(loc);
+                }
+                catch { /* skip assemblies that can't report location */ }
+            }
+
+            // Ensure netstandard.dll is present (facade assembly often missed)
+            var runtimeDir = System.IO.Path.GetDirectoryName(typeof(object).Assembly.Location) ?? "";
+            foreach (var facade in new[] { "netstandard.dll", "mscorlib.dll", "System.Runtime.dll" })
+            {
+                var path = System.IO.Path.Combine(runtimeDir, facade);
+                if (System.IO.File.Exists(path) && added.Add(path))
+                    refAssemblies.Add(path);
             }
         }
 

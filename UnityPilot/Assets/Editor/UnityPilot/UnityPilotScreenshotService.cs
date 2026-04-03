@@ -49,6 +49,18 @@ namespace SkillEditor.Editor.UnityPilot
         public string format;
     }
 
+    [Serializable]
+    internal class EditorWindowScreenshotMessage
+    {
+        public EditorWindowScreenshotPayload payload;
+    }
+
+    [Serializable]
+    internal class EditorWindowScreenshotPayload
+    {
+        public string windowTitle = "UnityPilot";
+    }
+
     // ── Service ─────────────────────────────────────────────────────────────────
 
     internal class UnityPilotScreenshotService
@@ -62,9 +74,54 @@ namespace SkillEditor.Editor.UnityPilot
 
         public void RegisterCommands()
         {
-            _bridge.Router.Register("screenshot.gameView",  HandleGameViewAsync);
-            _bridge.Router.Register("screenshot.sceneView", HandleSceneViewAsync);
-            _bridge.Router.Register("screenshot.camera",    HandleCameraAsync);
+            _bridge.Router.Register("screenshot.gameView",      HandleGameViewAsync);
+            _bridge.Router.Register("screenshot.sceneView",     HandleSceneViewAsync);
+            _bridge.Router.Register("screenshot.camera",        HandleCameraAsync);
+            _bridge.Router.Register("screenshot.editorWindow",  HandleEditorWindowAsync);
+        }
+
+        // ── screenshot.editorWindow ───────────────────────────────────────────
+
+        private async Task HandleEditorWindowAsync(string id, string json, CancellationToken token)
+        {
+            var msg = JsonUtility.FromJson<EditorWindowScreenshotMessage>(json);
+            var title = msg?.payload?.windowTitle ?? "UnityPilot";
+
+            var tcs = new TaskCompletionSource<string>();
+            _bridge.MainThreadQueue.Enqueue(() =>
+            {
+                try
+                {
+                    string base64 = UnityPilotWindowDiagnostics.CaptureEditorWindowBase64(title);
+                    tcs.SetResult(base64);
+                }
+                catch (Exception ex)
+                {
+                    tcs.SetException(ex);
+                }
+            });
+
+            string result;
+            try
+            {
+                result = await tcs.Task;
+            }
+            catch (Exception ex)
+            {
+                await _bridge.SendErrorAsync(id, "SCREENSHOT_FAILED", ex.Message, token, "screenshot.editorWindow");
+                return;
+            }
+
+            if (result == null)
+            {
+                await _bridge.SendErrorAsync(id, "WINDOW_NOT_FOUND",
+                    $"Editor window '{title}' not found or capture not supported on this platform.",
+                    token, "screenshot.editorWindow");
+                return;
+            }
+
+            var payload = new ScreenshotResultPayload { imageData = result, width = 0, height = 0, format = "png" };
+            await _bridge.SendResultAsync(id, "screenshot.editorWindow", payload, token);
         }
 
         // ── screenshot.gameView ─────────────────────────────────────────────────

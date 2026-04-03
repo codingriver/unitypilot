@@ -3,6 +3,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.UIElements;
 
 namespace SkillEditor.Editor.UnityPilot
 {
@@ -86,6 +87,16 @@ namespace SkillEditor.Editor.UnityPilot
 
             var mods = UnityPilotPlayInputService.ParseModifiers(payload.modifiers);
 
+            // Auto-route: if the window has UIToolkit content, prefer UIToolkit synthetic events
+            var root = window.rootVisualElement;
+            if (root != null && root.childCount > 0)
+            {
+                var sent = SendUIToolkitKeyboardEvent(root, action, parsedKeyCode, payload.character, payload.text, mods);
+                if (sent)
+                    return new GenericOkPayload { ok = true, state = $"{action}:{payload.targetWindow}:uitoolkit" };
+            }
+
+            // Fallback: IMGUI SendEvent
             switch (action)
             {
                 case "keydown":
@@ -121,6 +132,54 @@ namespace SkillEditor.Editor.UnityPilot
             }
 
             return new GenericOkPayload { ok = true, state = $"{action}:{payload.targetWindow}" };
+        }
+
+        private static bool SendUIToolkitKeyboardEvent(VisualElement root, string action, KeyCode keyCode, char character, string text, EventModifiers mods)
+        {
+            var target = root.panel?.visualTree;
+            if (target == null) return false;
+
+            // Try to use the currently focused element as the target
+            var focused = root.focusController?.focusedElement as VisualElement;
+            if (focused != null) target = focused;
+
+            switch (action)
+            {
+                case "keydown":
+                {
+                    var imguiEvt = new Event { type = EventType.KeyDown, keyCode = keyCode, character = character, modifiers = mods };
+                    using (var evt = KeyDownEvent.GetPooled(imguiEvt)) { target.SendEvent(evt); }
+                    return true;
+                }
+                case "keyup":
+                {
+                    var imguiEvt = new Event { type = EventType.KeyUp, keyCode = keyCode, character = character, modifiers = mods };
+                    using (var evt = KeyUpEvent.GetPooled(imguiEvt)) { target.SendEvent(evt); }
+                    return true;
+                }
+                case "keypress":
+                {
+                    var downEvt = new Event { type = EventType.KeyDown, keyCode = keyCode, character = character, modifiers = mods };
+                    using (var evt = KeyDownEvent.GetPooled(downEvt)) { target.SendEvent(evt); }
+                    var upEvt = new Event { type = EventType.KeyUp, keyCode = keyCode, character = character, modifiers = mods };
+                    using (var evt = KeyUpEvent.GetPooled(upEvt)) { target.SendEvent(evt); }
+                    return true;
+                }
+                case "type":
+                {
+                    var t = text ?? string.Empty;
+                    foreach (var ch in t)
+                    {
+                        var downEvt = new Event { type = EventType.KeyDown, keyCode = KeyCode.None, character = ch, modifiers = mods };
+                        using (var evt = KeyDownEvent.GetPooled(downEvt)) { target.SendEvent(evt); }
+                        var upEvt = new Event { type = EventType.KeyUp, keyCode = KeyCode.None, character = ch, modifiers = mods };
+                        using (var evt = KeyUpEvent.GetPooled(upEvt)) { target.SendEvent(evt); }
+                    }
+                    return true;
+                }
+                default:
+                    return false;
+            }
         }
 
         private static void SendKeyDown(EditorWindow window, KeyCode keyCode, char character, EventModifiers modifiers)

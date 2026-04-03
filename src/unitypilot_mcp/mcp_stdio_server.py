@@ -154,16 +154,18 @@ async def unity_playmode_stop() -> str:
     return _payload(r)
 
 
-@mcp.tool(description="执行 Unity 编辑器鼠标动作。")
+@mcp.tool(description="执行 Unity 编辑器鼠标动作。支持 elementName 按名称自动定位 UIToolkit 元素中心坐标（无需手动算坐标）。")
 async def unity_mouse_event(
     action: str,
     button: str,
-    x: float,
-    y: float,
-    targetWindow: str,
+    x: float = 0,
+    y: float = 0,
+    targetWindow: str = "",
     modifiers: list[str] | None = None,
     scrollDeltaX: float = 0.0,
     scrollDeltaY: float = 0.0,
+    elementName: str = "",
+    elementIndex: int = -1,
 ) -> str:
     r = await _get_facade().mouse_event(
         action=action,
@@ -174,6 +176,8 @@ async def unity_mouse_event(
         modifiers=modifiers,
         scroll_delta_x=scrollDeltaX,
         scroll_delta_y=scrollDeltaY,
+        element_name=elementName,
+        element_index=elementIndex,
     )
     return _payload(r)
 
@@ -219,6 +223,99 @@ async def unity_uitoolkit_event(
         key_code=keyCode, character=character,
         mouse_button=mouseButton, mouse_x=mouseX, mouse_y=mouseY,
         modifiers=modifiers,
+    )
+    return _payload(r)
+
+
+@mcp.tool(description="滚动 UIToolkit ScrollView 到指定位置或增量偏移。mode='absolute' 使用 scrollToX/scrollToY，mode='delta' 使用 deltaX/deltaY。")
+async def unity_uitoolkit_scroll(
+    targetWindow: str,
+    elementName: str = "",
+    elementIndex: int = -1,
+    scrollToX: float = -1,
+    scrollToY: float = -1,
+    deltaX: float = 0,
+    deltaY: float = 0,
+    mode: str = "absolute",
+) -> str:
+    r = await _get_facade().uitoolkit_scroll(
+        target_window=targetWindow, element_name=elementName,
+        element_index=elementIndex, scroll_to_x=scrollToX,
+        scroll_to_y=scrollToY, delta_x=deltaX, delta_y=deltaY,
+        mode=mode,
+    )
+    return _payload(r)
+
+
+@mcp.tool(description="直接设置 UIToolkit 元素的值（TextField/Toggle/Slider/Dropdown/IntegerField/FloatField/Foldout）。通过 elementName 或 elementIndex 定位元素。")
+async def unity_uitoolkit_set_value(
+    targetWindow: str,
+    value: str,
+    elementName: str = "",
+    elementIndex: int = -1,
+) -> str:
+    r = await _get_facade().uitoolkit_set_value(
+        target_window=targetWindow, value=value,
+        element_name=elementName, element_index=elementIndex,
+    )
+    return _payload(r)
+
+
+@mcp.tool(description="对 UIToolkit 元素执行交互（click/focus/blur），自动计算元素中心坐标，无需手动传坐标。")
+async def unity_uitoolkit_interact(
+    targetWindow: str,
+    action: str = "click",
+    elementName: str = "",
+    elementIndex: int = -1,
+) -> str:
+    r = await _get_facade().uitoolkit_interact(
+        target_window=targetWindow, action=action,
+        element_name=elementName, element_index=elementIndex,
+    )
+    return _payload(r)
+
+
+@mcp.tool(description="轮询等待 UIToolkit UI 条件满足。conditionType: element_exists(元素存在) | element_not_exists(元素消失) | element_value(值匹配) | text_contains(文本包含)。")
+async def unity_wait_condition(
+    targetWindow: str,
+    conditionType: str = "element_exists",
+    elementName: str = "",
+    textContains: str = "",
+    valueEquals: str = "",
+    typeFilter: str = "",
+    timeoutS: float = 30,
+    pollIntervalS: float = 0.5,
+) -> str:
+    r = await _get_facade().wait_condition(
+        target_window=targetWindow, condition_type=conditionType,
+        element_name=elementName, text_contains=textContains,
+        value_equals=valueEquals, type_filter=typeFilter,
+        timeout_s=timeoutS, poll_interval_s=pollIntervalS,
+    )
+    return _payload(r)
+
+
+@mcp.tool(description="预检测试环境就绪：检查 Unity 连接 + 编译完成 + 编辑模式。返回 ready=true/false 及各项状态。")
+async def unity_ensure_ready(timeoutS: float = 120) -> str:
+    r = await _get_facade().ensure_ready(timeout_s=timeoutS)
+    return _payload(r)
+
+
+@mcp.tool(description="带超时看门狗执行 MCP 工具。超时→尝试重连 Unity→重试→总时间超限则跳过。用于自动化测试流水线防卡死。")
+async def unity_task_execute(
+    taskName: str,
+    toolName: str,
+    toolArgs: dict | None = None,
+    timeoutS: float = 600,
+    maxTotalS: float = 1200,
+    retryCount: int = 1,
+    restartUnityOnTimeout: bool = True,
+) -> str:
+    r = await _get_facade().task_execute(
+        task_name=taskName, tool_name=toolName,
+        tool_args=toolArgs, timeout_s=timeoutS,
+        max_total_s=maxTotalS, retry_count=retryCount,
+        restart_unity_on_timeout=restartUnityOnTimeout,
     )
     return _payload(r)
 
@@ -270,6 +367,12 @@ async def unity_keyboard_event(
         text=text,
         modifiers=modifiers,
     )
+    return _payload(r)
+
+
+@mcp.tool(description="列出 Unity 编辑器中所有打开的窗口（支持按类型和标题过滤），返回 instanceId/类型/标题/坐标等信息，用于窗口定位。")
+async def unity_editor_windows_list(typeFilter: str = "", titleFilter: str = "") -> str:
+    r = await _get_facade().editor_windows_list(type_filter=typeFilter, title_filter=titleFilter)
     return _payload(r)
 
 
@@ -520,6 +623,19 @@ async def unity_asset_delete(assetPath: str) -> str:
 @mcp.tool(description="触发 Unity 资源数据库刷新（AssetDatabase.Refresh）。")
 async def unity_asset_refresh() -> str:
     r = await _get_facade().asset_refresh()
+    return _payload(r)
+
+
+@mcp.tool(
+    description=(
+        "在 Cursor/IDE 中改完或新建完本轮所有脚本并全部保存后，再调用一次（不要每文件一调）："
+        "先等待 delayS 秒（默认 2，缓解落盘延迟），再 AssetDatabase.Refresh；"
+        "triggerCompile=true 时再触发 unity_compile（含 Refresh+脚本编译）。"
+        "随后可 unity_compile_wait 确认编译结束。避免 Unity 无焦点时迟迟不导入。"
+    ),
+)
+async def unity_sync_after_disk_write(delayS: float = 2.0, triggerCompile: bool = False) -> str:
+    r = await _get_facade().sync_after_disk_write(delay_s=delayS, trigger_compile=triggerCompile)
     return _payload(r)
 
 
@@ -849,6 +965,68 @@ async def resource_packages() -> str:
 @mcp.resource("unity://build/status", description="Unity 当前构建状态。")
 async def resource_build_status() -> str:
     r = await _get_facade().resource_build_status()
+    return _payload(r)
+
+
+@mcp.resource(
+    "unity://diagnostics/unitypilot-logs-tab",
+    description="UnityPilot 诊断日志标签页布局快照（横向滚动风险、滚动位置等，需打开窗口并切到该标签）。",
+)
+async def resource_unitypilot_logs_tab() -> str:
+    r = await _get_facade().resource_unitypilot_logs_tab()
+    return _payload(r)
+
+
+@mcp.resource(
+    "unity://diagnostics/window",
+    description="UnityPilot 全窗口级布局诊断快照（健康分、各区域宽度溢出检测、编译状态、代码版本、Domain Reload 纪元）。",
+)
+async def resource_window_diagnostics() -> str:
+    r = await _get_facade().resource_window_diagnostics()
+    return _payload(r)
+
+
+@mcp.resource(
+    "unity://console/summary",
+    description="Unity 控制台日志按类型统计（logCount/warningCount/errorCount/assertCount）。",
+)
+async def resource_console_summary() -> str:
+    r = await _get_facade().resource_console_summary()
+    return _payload(r)
+
+
+# ── M26 验收自动化工具 ─────────────────────────────────────────────────────
+
+
+@mcp.tool(description="等待 Unity 编译完成。轮询 editorState.isCompiling 直到 false 或超时，返回 status='ready'|'timeout'。")
+async def unity_compile_wait(
+    timeoutS: float = 120,
+    pollIntervalS: float = 1.0,
+) -> str:
+    r = await _get_facade().compile_wait(timeout_s=timeoutS, poll_interval_s=pollIntervalS)
+    return _payload(r)
+
+
+@mcp.tool(description="截取 Unity 编辑器窗口（EditorWindow）画面，返回 Base64 编码的 PNG。通过窗口标题匹配。")
+async def unity_screenshot_editor_window(
+    windowTitle: str = "UnityPilot",
+) -> str:
+    r = await _get_facade().screenshot_editor_window(window_title=windowTitle)
+    return _payload(r)
+
+
+@mcp.tool(description="一次性获取全部诊断信息：窗口布局诊断 + 控制台摘要 + 编辑器状态。免去多次调用。")
+async def unity_batch_diagnostics() -> str:
+    r = await _get_facade().batch_diagnostics()
+    return _payload(r)
+
+
+@mcp.tool(description="全自动窗口验收：等编译完成 → 截图（可选） + 窗口布局诊断 + 控制台摘要，一次调用完成所有验收步骤。")
+async def unity_verify_window(
+    windowTitle: str = "UnityPilot",
+    includeScreenshot: bool = True,
+) -> str:
+    r = await _get_facade().verify_window(window_title=windowTitle, include_screenshot=includeScreenshot)
     return _payload(r)
 
 

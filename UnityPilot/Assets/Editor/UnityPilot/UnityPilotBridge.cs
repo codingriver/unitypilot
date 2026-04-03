@@ -189,6 +189,7 @@ namespace SkillEditor.Editor.UnityPilot
         private UnityPilotKeyboardService   _keyboardService;
         private UnityPilotUIToolkitService  _uiToolkitService;
         private UnityPilotEditorService     _editorService;
+        private UnityPilotWindowService     _windowService;
 
         private ClientWebSocket      _ws;
         private CancellationTokenSource _cts;
@@ -314,6 +315,8 @@ namespace SkillEditor.Editor.UnityPilot
             EditorApplication.update += ProcessMainThreadQueue;
             CompilationPipeline.compilationStarted += OnCompilationStarted;
             CompilationPipeline.compilationFinished += OnCompilationFinished;
+            AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
+            AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
             AddLog("info", "Bridge 已启动，准备连接 " + GetServerUrl());
             _ = ConnectLoopAsync(_cts.Token);
         }
@@ -331,6 +334,8 @@ namespace SkillEditor.Editor.UnityPilot
                 EditorApplication.update -= ProcessMainThreadQueue;
                 CompilationPipeline.compilationStarted -= OnCompilationStarted;
                 CompilationPipeline.compilationFinished -= OnCompilationFinished;
+                AssemblyReloadEvents.beforeAssemblyReload -= OnBeforeAssemblyReload;
+                AssemblyReloadEvents.afterAssemblyReload -= OnAfterAssemblyReload;
                 _started = false;
                 _isAuthenticated = false;
                 _lastHeartbeatSentAt = 0;
@@ -555,6 +560,9 @@ namespace SkillEditor.Editor.UnityPilot
 
             _editorService = new UnityPilotEditorService(this);
             _editorService.RegisterCommands();
+
+            _windowService = new UnityPilotWindowService(this);
+            _windowService.RegisterCommands();
         }
 
         // ──────────────────────────────── Command handlers ────────────────────────────────
@@ -772,6 +780,45 @@ namespace SkillEditor.Editor.UnityPilot
             _ = SendPlayModeChangedEventAsync(_cts.Token);
         }
 
+        private void OnBeforeAssemblyReload()
+        {
+            AddLog("info", "Domain Reload 即将开始，发送 domain_reload.starting 事件");
+            if (_ws?.State == WebSocketState.Open && _isAuthenticated)
+            {
+                try
+                {
+                    var payload = new DomainReloadPayload
+                    {
+                        phase = "starting",
+                        isCompiling = _compileService.IsCompiling,
+                        playModeState = _playInputService.CurrentPlayModeChangedPayload().state,
+                    };
+                    // Synchronous send — we must complete before the domain unloads
+                    var msg = new EventMessage<DomainReloadPayload>
+                    {
+                        id = $"evt-domain-reload-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                        name = "domain_reload.starting",
+                        payload = payload,
+                        timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        sessionId = _sessionId,
+                    };
+                    var json = JsonUtility.ToJson(msg);
+                    var bytes = Encoding.UTF8.GetBytes(json);
+                    _ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None)
+                       .GetAwaiter().GetResult();
+                }
+                catch (Exception ex)
+                {
+                    AddLog("warn", $"发送 domain_reload.starting 失败：{ex.Message}");
+                }
+            }
+        }
+
+        private void OnAfterAssemblyReload()
+        {
+            AddLog("info", "Domain Reload 完成");
+        }
+
         private void OnCompilationStarted(object _)
         {
             AddLog("info", "Unity 开始编译");
@@ -842,21 +889,8 @@ namespace SkillEditor.Editor.UnityPilot
             // 默认过滤心跳日志，避免实时流刷屏。
             if (type == "heartbeat") return;
 
-            if (type == "command")
-            {
-                var filter = $"[RX] command {commandName} id={envelope.id}";
-                var detail = $"command {commandName} id={envelope.id}";
-                AppendLogEntry(BridgeLogEntry.Wire("info", "RX", false, envelope, detail, filter));
-            }
-            else
-            {
-                var summary = BuildPayloadSummary(type, json);
-                var filter = $"[RX] {type} {commandName} id={envelope.id}{summary}";
-                var detail = $"{type} {commandName}{summary}".Trim();
-                AppendLogEntry(BridgeLogEntry.Wire("info", "RX", false, envelope, detail, filter));
-            }
-
-            AppendLogEntry(BridgeLogEntry.Wire("info", "RX", true, envelope, json, $"[RX-RAW] {json}"));
+            var filter = $"[recv] {type} {commandName}";
+            AppendLogEntry(BridgeLogEntry.Wire("info", "RX", true, envelope, json, filter));
         }
 
         private void LogOutboundCommand(string json)
@@ -872,49 +906,8 @@ namespace SkillEditor.Editor.UnityPilot
             // 默认过滤心跳日志，避免实时流刷屏。
             if (type == "heartbeat") return;
 
-            var summary = BuildPayloadSummary(type, json);
-            var filter = $"[TX] {type} {commandName} id={envelope.id}{summary}";
-            var detail = $"{type} {commandName}{summary}".Trim();
-            AppendLogEntry(BridgeLogEntry.Wire("info", "TX", false, envelope, detail, filter));
-            AppendLogEntry(BridgeLogEntry.Wire("info", "TX", true, envelope, json, $"[TX-RAW] {json}"));
-        }
-
-        private static string BuildPayloadSummary(string type, string json)
-        {
-            if (string.IsNullOrEmpty(type) || string.IsNullOrEmpty(json))
-                return string.Empty;
-
-            try
-            {
-                if (type == "result" || type == "event")
-                {
-                    var generic = JsonUtility.FromJson<GenericOkEnvelope>(json);
-                    if (generic?.payload != null)
-                    {
-                        var ok = $", ok={generic.payload.ok}";
-                        var status = !string.IsNullOrEmpty(generic.payload.status) ? $", status={generic.payload.status}" : string.Empty;
-                        var state = !string.IsNullOrEmpty(generic.payload.state) ? $", state={generic.payload.state}" : string.Empty;
-                        if (!string.IsNullOrEmpty(status) || !string.IsNullOrEmpty(state) || !string.IsNullOrEmpty(ok))
-                            return $" ({(ok + status + state).TrimStart(',', ' ')})";
-                    }
-                }
-
-                if (type == "error")
-                {
-                    var error = JsonUtility.FromJson<ErrorMessage>(json);
-                    if (error?.payload != null)
-                    {
-                        var code = string.IsNullOrEmpty(error.payload.code) ? "UNKNOWN" : error.payload.code;
-                        return $" (code={code})";
-                    }
-                }
-            }
-            catch
-            {
-                // ignored: summary is best-effort only
-            }
-
-            return string.Empty;
+            var filter = $"[send] {type} {commandName}";
+            AppendLogEntry(BridgeLogEntry.Wire("info", "TX", true, envelope, json, filter));
         }
 
         internal void AddLog(string level, string message)

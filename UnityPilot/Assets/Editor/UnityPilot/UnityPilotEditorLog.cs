@@ -86,8 +86,9 @@ namespace SkillEditor.Editor.UnityPilot
                 ? DateTimeOffset.FromUnixTimeMilliseconds(e.WireEnvelopeUnixMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss.fff")
                 : e.Time.ToString("yyyy-MM-dd HH:mm:ss.fff");
 
-            var raw = e.WireIsRaw ? "raw=yes" : "raw=no";
-            return $"[{lvl}] {ts} | {raw} | dir={e.WireDirection} | sessionId={e.WireSessionId} | name={e.WireName} | type={e.WireType} | id={e.WireId} | {e.WireDetail}";
+            var tag = e.WireDirection == "TX" ? "send" : "recv";
+            var body = e.WireIsRaw ? UnityPilotWireJson.StripEnvelopeForDisplay(e.WireDetail) : e.WireDetail;
+            return $"[{lvl}] {tag} {ts} | sessionId={e.WireSessionId} | name={e.WireName} | type={e.WireType} | id={e.WireId} | {body}";
         }
 
         public static void RevealLogFile()

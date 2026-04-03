@@ -48,12 +48,54 @@ namespace SkillEditor.Editor.UnityPilot
 
     internal sealed class UnityPilotConsoleService
     {
+        private const int RingBufferCapacity = 500;
+
+        private static readonly object _ringLock = new();
+        private static readonly List<ConsoleLogEntry> _ringBuffer = new(RingBufferCapacity);
+        private static bool _subscribed;
+
         private readonly UnityPilotBridge _bridge;
 
         public UnityPilotConsoleService(UnityPilotBridge bridge)
         {
             _bridge = bridge;
+            EnsureLogSubscription();
         }
+
+        private static void EnsureLogSubscription()
+        {
+            if (_subscribed) return;
+            _subscribed = true;
+            UnityEngine.Application.logMessageReceived += OnLogMessageReceived;
+        }
+
+        private static void OnLogMessageReceived(string condition, string stackTrace, UnityEngine.LogType logType)
+        {
+            var entry = new ConsoleLogEntry
+            {
+                logType = LogTypeToString(logType),
+                message = condition ?? "",
+                stackTrace = stackTrace ?? "",
+                timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                count = 1,
+            };
+            lock (_ringLock)
+            {
+                if (_ringBuffer.Count >= RingBufferCapacity)
+                    _ringBuffer.RemoveAt(0);
+                _ringBuffer.Add(entry);
+            }
+        }
+
+        private static string LogTypeToString(UnityEngine.LogType t) => t switch
+        {
+            UnityEngine.LogType.Error => "Error",
+            UnityEngine.LogType.Assert => "Assert",
+            UnityEngine.LogType.Warning => "Warning",
+            UnityEngine.LogType.Log => "Log",
+            UnityEngine.LogType.Exception => "Exception",
+            _ => "Log",
+        };
 
         public void RegisterCommands()
         {
@@ -121,30 +163,51 @@ namespace SkillEditor.Editor.UnityPilot
             }
         }
 
-        // ── Internal API via reflection on LogEntries ─────────────────────────
+        // ── Internal API — ring buffer primary, reflection fallback ────────────
 
         private static ConsoleLogsResultPayload GetConsoleLogs(string logType, int count)
         {
+            // Primary: read from Application.logMessageReceived ring buffer
+            var result = GetLogsFromRingBuffer(logType, count);
+            if (result.logs.Count > 0)
+                return result;
+
+            // Fallback: reflection on internal LogEntries API
+            return GetLogsViaReflection(logType, count);
+        }
+
+        private static ConsoleLogsResultPayload GetLogsFromRingBuffer(string logType, int count)
+        {
+            var result = new ConsoleLogsResultPayload();
+            lock (_ringLock)
+            {
+                for (int i = _ringBuffer.Count - 1; i >= 0 && result.logs.Count < count; i--)
+                {
+                    var entry = _ringBuffer[i];
+                    if (!string.IsNullOrEmpty(logType) &&
+                        !string.Equals(entry.logType, logType, StringComparison.OrdinalIgnoreCase))
+                        continue;
+                    result.logs.Add(entry);
+                }
+            }
+            result.total = result.logs.Count;
+            return result;
+        }
+
+        private static ConsoleLogsResultPayload GetLogsViaReflection(string logType, int count)
+        {
             var result = new ConsoleLogsResultPayload();
 
-            // Use internal LogEntries API
-            var logEntriesType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.LogEntries");
-            if (logEntriesType == null)
-            {
-                // Fallback: try alternate name
-                logEntriesType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditorInternal.LogEntries");
-            }
+            var logEntriesType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.LogEntries")
+                              ?? typeof(UnityEditor.Editor).Assembly.GetType("UnityEditorInternal.LogEntries");
             if (logEntriesType == null) return result;
 
-            // Get total count
-            var getCountMethod = logEntriesType.GetMethod("StartGettingEntries",
+            var startMethod = logEntriesType.GetMethod("StartGettingEntries",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
             var endMethod = logEntriesType.GetMethod("EndGettingEntries",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
             var getEntryMethod = logEntriesType.GetMethod("GetEntryInternal",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
-
-            // Alternative: use GetCountsByType + row-based approach
             var getCount = logEntriesType.GetMethod("GetCount",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
 
@@ -153,30 +216,21 @@ namespace SkillEditor.Editor.UnityPilot
             int totalCount = (int)getCount.Invoke(null, null);
             if (totalCount == 0) return result;
 
-            // Start getting entries
-            if (getCountMethod != null)
-                getCountMethod.Invoke(null, null);
+            startMethod?.Invoke(null, null);
 
             try
             {
-                // LogEntry type
-                var logEntryType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.LogEntry");
-                if (logEntryType == null)
-                    logEntryType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditorInternal.LogEntry");
+                var logEntryType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.LogEntry")
+                                ?? typeof(UnityEditor.Editor).Assembly.GetType("UnityEditorInternal.LogEntry");
 
                 if (logEntryType == null || getEntryMethod == null)
-                {
-                    // Fallback: use GetEntryAtIndex or similar
                     return FallbackGetLogs(logEntriesType, logType, count, totalCount);
-                }
 
                 var entry = Activator.CreateInstance(logEntryType);
                 var messageField = logEntryType.GetField("message") ?? logEntryType.GetField("condition");
                 var modeField = logEntryType.GetField("mode");
 
-                var collected = new List<ConsoleLogEntry>();
-
-                for (int i = totalCount - 1; i >= 0 && collected.Count < count; i--)
+                for (int i = totalCount - 1; i >= 0 && result.logs.Count < count; i--)
                 {
                     bool ok = (bool)getEntryMethod.Invoke(null, new object[] { i, entry });
                     if (!ok) continue;
@@ -189,7 +243,6 @@ namespace SkillEditor.Editor.UnityPilot
                         continue;
 
                     string msg = messageField?.GetValue(entry)?.ToString() ?? "";
-                    // Split message and stacktrace (Unity stores them together separated by \n)
                     string stackTrace = "";
                     int nlIndex = msg.IndexOf('\n');
                     if (nlIndex >= 0)
@@ -198,7 +251,7 @@ namespace SkillEditor.Editor.UnityPilot
                         msg = msg.Substring(0, nlIndex);
                     }
 
-                    collected.Add(new ConsoleLogEntry
+                    result.logs.Add(new ConsoleLogEntry
                     {
                         logType = entryType,
                         message = msg,
@@ -208,13 +261,11 @@ namespace SkillEditor.Editor.UnityPilot
                     });
                 }
 
-                result.logs = collected;
-                result.total = collected.Count;
+                result.total = result.logs.Count;
             }
             finally
             {
-                if (endMethod != null)
-                    endMethod.Invoke(null, null);
+                endMethod?.Invoke(null, null);
             }
 
             return result;
@@ -224,7 +275,6 @@ namespace SkillEditor.Editor.UnityPilot
         {
             var result = new ConsoleLogsResultPayload();
 
-            // Try ConsoleWindow approach
             var getEntryAtIndex = logEntriesType.GetMethod("GetEntryStringAtIndex",
                 System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static);
             if (getEntryAtIndex == null) return result;
@@ -247,11 +297,6 @@ namespace SkillEditor.Editor.UnityPilot
 
         private static string ModeToLogType(int mode)
         {
-            // Unity LogEntry mode flags:
-            // bit 0 = Error, bit 1 = Assert, bit 2 = Log, bit 3 = Fatal (Exception)
-            // bit 4 = DontPreprocessCondition, bit 5 = AssetImportError, ...
-            // bit 8 = ScriptingError, bit 9 = ScriptingWarning, bit 10 = ScriptingLog
-            // bit 11 = ScriptCompileError, bit 12 = ScriptCompileWarning
             if ((mode & (1 << 0)) != 0) return "Error";
             if ((mode & (1 << 1)) != 0) return "Assert";
             if ((mode & (1 << 3)) != 0) return "Exception";

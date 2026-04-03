@@ -50,9 +50,6 @@ namespace SkillEditor.Editor.UnityPilot
         private GUIStyle _styleError;
         private GUIStyle _styleBox;
         private GUIStyle _styleLogCard;
-        private GUIStyle _styleLogSelInfo;
-        private GUIStyle _styleLogSelWarn;
-        private GUIStyle _styleLogSelError;
         private bool     _stylesInit;
 
         [MenuItem("UnityPilot/UnityPilot", false, 200)]
@@ -68,6 +65,7 @@ namespace SkillEditor.Editor.UnityPilot
             var bridge = UnityPilotBridge.Instance;
             _wsHostInput = bridge.WsHost;
             _wsPortInput = bridge.WsPort;
+            _activeTab = EditorPrefs.GetInt("UnityPilot.ActiveTab", 0);
             EditorApplication.update += OnEditorUpdate;
         }
 
@@ -75,6 +73,7 @@ namespace SkillEditor.Editor.UnityPilot
         {
             EditorApplication.update -= OnEditorUpdate;
             PersistEndpointInputsIfIdle();
+            UnityPilotWindowDiagnostics.OnWindowClosed();
         }
 
         /// <summary>
@@ -127,40 +126,6 @@ namespace SkillEditor.Editor.UnityPilot
                 padding = new RectOffset(10, 10, 8, 8),
                 margin  = new RectOffset(6, 6, 0, 12),
             };
-
-            _styleLogSelInfo  = CreatePassiveLogSelectable(_styleInfo.normal.textColor);
-            _styleLogSelWarn  = CreatePassiveLogSelectable(_styleWarn.normal.textColor);
-            _styleLogSelError = CreatePassiveLogSelectable(_styleError.normal.textColor);
-        }
-
-        private static GUIStyle CreatePassiveLogSelectable(Color textColor)
-        {
-            var s = new GUIStyle(EditorStyles.textArea)
-            {
-                wordWrap = true,
-                richText = false,
-            };
-            s.normal.textColor = textColor;
-            MirrorSelectableStatesFromNormal(s);
-            return s;
-        }
-
-        private static void MirrorSelectableStatesFromNormal(GUIStyle s)
-        {
-            void Mirror(GUIStyleState to)
-            {
-                if (to == null || s.normal == null) return;
-                to.background = s.normal.background;
-                to.textColor = s.normal.textColor;
-                to.scaledBackgrounds = s.normal.scaledBackgrounds;
-            }
-
-            Mirror(s.focused);
-            Mirror(s.active);
-            Mirror(s.hover);
-            Mirror(s.onFocused);
-            Mirror(s.onActive);
-            Mirror(s.onHover);
         }
 
         // ─────────────────────────────────── GUI ──────────────────────────────
@@ -186,11 +151,17 @@ namespace SkillEditor.Editor.UnityPilot
             DrawToastIfAny();
 
             EditorGUILayout.Space(4);
+            int prevTab = _activeTab;
             _activeTab = GUILayout.Toolbar(_activeTab, new[] { "运行状态", "诊断日志" });
+            if (_activeTab != prevTab)
+                EditorPrefs.SetInt("UnityPilot.ActiveTab", _activeTab);
             EditorGUILayout.Space(4);
+
+            UnityPilotWindowDiagnostics.RecordWindow(position.width, position.height, _activeTab);
 
             if (_activeTab == 0)
             {
+                UnityPilotLogsTabDiagnostics.ClearNotOnLogsTab();
                 DrawRuntimeTab(bridge, _guiStatusSnapshot, _guiDiagResultSnapshot, _guiDiagRunningSnapshot, _guiDiagResultAtMsSnapshot);
             }
             else
@@ -212,36 +183,51 @@ namespace SkillEditor.Editor.UnityPilot
 
         private void DrawLogsTab(UnityPilotBridge bridge, List<BridgeLogEntry> logs)
         {
-            using (new EditorGUILayout.VerticalScope(_styleBox))
+            var tabMaxW = Mathf.Max(100f, position.width);
+            using (new EditorGUILayout.VerticalScope(_styleBox, GUILayout.MaxWidth(tabMaxW)))
             {
                 DrawLogToolbar(logs, bridge);
 
                 float logHeight = Mathf.Clamp(position.height * 0.68f, 220f, 640f);
-                _logScroll = EditorGUILayout.BeginScrollView(_logScroll, GUILayout.Height(logHeight));
+                _logScroll.x = 0f;
 
-                var contentW = Mathf.Max(120f, position.width - 52f);
+                var vBarW = GUI.skin.verticalScrollbar.fixedWidth > 0f
+                    ? GUI.skin.verticalScrollbar.fixedWidth
+                    : 15f;
+                // 滚动区域内容宽度不得超过视口，否则会出现横向滚动条
+                var scrollViewportW = Mathf.Max(80f, position.width - 28f - vBarW);
+                var labelMaxW = Mathf.Max(60f, scrollViewportW - 28f);
 
-                foreach (var entry in logs)
+                _logScroll = EditorGUILayout.BeginScrollView(
+                    _logScroll,
+                    false,
+                    true,
+                    GUIStyle.none,
+                    GUI.skin.verticalScrollbar,
+                    GUI.skin.scrollView,
+                    GUILayout.Height(logHeight),
+                    GUILayout.MaxWidth(tabMaxW));
+
+                using (new EditorGUILayout.VerticalScope(GUILayout.MaxWidth(scrollViewportW)))
                 {
-                    if (!ShouldShowLogEntry(entry)) continue;
-
-                    var fullText = BuildLogEntryDisplayText(entry);
-                    var selStyle = GetLogSelectableStyle(entry);
-                    var blockH = selStyle.CalcHeight(new GUIContent(fullText), contentW);
-                    blockH = Mathf.Max(blockH, EditorGUIUtility.singleLineHeight * 2f);
-
-                    using (new EditorGUILayout.VerticalScope(_styleLogCard))
+                    foreach (var entry in logs)
                     {
-                        EditorGUILayout.SelectableLabel(fullText, selStyle, GUILayout.Width(contentW), GUILayout.Height(blockH));
+                        if (!ShouldShowLogEntry(entry)) continue;
 
-                        using (new EditorGUILayout.HorizontalScope())
+                        var fullText = BuildLogEntryDisplayText(entry);
+                        var labelStyle = GetLogLabelStyle(entry);
+                        var blockH = labelStyle.CalcHeight(new GUIContent(fullText), labelMaxW);
+                        blockH = Mathf.Max(blockH, EditorGUIUtility.singleLineHeight * 2f);
+
+                        using (new EditorGUILayout.VerticalScope(_styleLogCard))
                         {
-                            GUILayout.FlexibleSpace();
-                            if (GUILayout.Button("复制本条", EditorStyles.miniButton, GUILayout.Width(52)))
-                            {
-                                GUIUtility.systemCopyBuffer = fullText;
-                                ShowToast("已复制本条日志");
-                            }
+                            EditorGUILayout.LabelField(
+                                fullText,
+                                labelStyle,
+                                GUILayout.Width(labelMaxW),
+                                GUILayout.MaxWidth(labelMaxW),
+                                GUILayout.Height(blockH),
+                                GUILayout.ExpandWidth(false));
                         }
                     }
                 }
@@ -250,14 +236,17 @@ namespace SkillEditor.Editor.UnityPilot
 
                 if (_autoScroll && logs.Count > 0)
                     _logScroll = new Vector2(0, float.MaxValue);
+
+                UnityPilotLogsTabDiagnostics.RecordLogsTab(position.width, scrollViewportW, labelMaxW, _logScroll);
+                UnityPilotWindowDiagnostics.RecordSection("logScroll", labelMaxW, scrollViewportW);
             }
         }
 
-        private GUIStyle GetLogSelectableStyle(BridgeLogEntry entry)
+        private GUIStyle GetLogLabelStyle(BridgeLogEntry entry)
         {
-            if (entry.Level == "warn") return _styleLogSelWarn;
-            if (entry.Level == "error") return _styleLogSelError;
-            return _styleLogSelInfo;
+            if (entry.Level == "warn") return _styleWarn;
+            if (entry.Level == "error") return _styleError;
+            return _styleInfo;
         }
 
         private static string BuildLogEntryDisplayText(BridgeLogEntry entry)
@@ -265,13 +254,18 @@ namespace SkillEditor.Editor.UnityPilot
             if (!entry.IsWireStructured)
                 return $"[{entry.Time:yyyy-MM-dd HH:mm:ss.fff}] {entry.Message}";
 
+            var tag = entry.WireDirection == "TX" ? "[send]" : "[recv]";
             var ts = entry.WireEnvelopeUnixMs > 0
                 ? DateTimeOffset.FromUnixTimeMilliseconds(entry.WireEnvelopeUnixMs).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss.fff")
                 : entry.Time.ToString("yyyy-MM-dd HH:mm:ss.fff");
-            var meta =
-                $"{ts}  |  sessionId={entry.WireSessionId}  |  name={entry.WireName}  |  type={entry.WireType}  |  id={entry.WireId}";
-            var body = (entry.WireIsRaw ? "[RAW] " : "") + entry.WireDetail;
-            return meta + Environment.NewLine + body;
+            var line1 =
+                $"{tag}  {ts}  |  sessionId={entry.WireSessionId}  |  name={entry.WireName}  |  type={entry.WireType}  |  id={entry.WireId}";
+
+            if (!entry.WireIsRaw)
+                return line1 + Environment.NewLine + entry.WireDetail;
+
+            var body = UnityPilotWireJson.StripEnvelopeForDisplay(entry.WireDetail);
+            return line1 + Environment.NewLine + body;
         }
 
         private void DrawTopStatusOverview(BridgeStatus status)
@@ -546,44 +540,58 @@ namespace SkillEditor.Editor.UnityPilot
 
         private void DrawLogToolbar(List<BridgeLogEntry> logs, UnityPilotBridge bridge)
         {
-            using (new EditorGUILayout.HorizontalScope())
+            var toolbarMaxW = Mathf.Max(50f, position.width - 16f);
+            float row1Min = 52 + 88 + 70 + 60 + 24;
+            float row2Min = 40 * 3 + 44 * 2 + 52 + 36 + 24;
+            float toolbarDesired = Mathf.Max(row1Min, row2Min);
+            UnityPilotWindowDiagnostics.RecordSection("logToolbar", toolbarDesired, toolbarMaxW);
+
+            using (new EditorGUILayout.VerticalScope(GUILayout.MaxWidth(toolbarMaxW)))
             {
-                EditorGUILayout.LabelField("通信日志", EditorStyles.boldLabel, GUILayout.Width(52));
-                GUILayout.FlexibleSpace();
-
-                if (GUILayout.Button("打开日志文件", EditorStyles.miniButton, GUILayout.Width(88)))
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    UnityPilotEditorLog.RevealLogFile();
-                    ShowToast("已定位到 " + UnityPilotEditorLog.LogFilePath);
+                    EditorGUILayout.LabelField("通信日志", EditorStyles.boldLabel, GUILayout.Width(52));
+                    GUILayout.FlexibleSpace();
+
+                    if (GUILayout.Button("打开日志文件", EditorStyles.miniButton, GUILayout.Width(88)))
+                    {
+                        UnityPilotEditorLog.RevealLogFile();
+                        ShowToast("已定位到 " + UnityPilotEditorLog.LogFilePath);
+                    }
+
+                    var debugWire = bridge.DebugWireLogsEnabled;
+                    var newDebugWire = GUILayout.Toggle(debugWire, "调试通信", EditorStyles.miniButton, GUILayout.Width(70));
+                    if (newDebugWire != debugWire)
+                    {
+                        bridge.DebugWireLogsEnabled = newDebugWire;
+                        ShowToast(newDebugWire ? "已开启调试通信日志（含实时 RAW）" : "已关闭调试通信日志");
+                    }
+
+                    _autoScroll = GUILayout.Toggle(_autoScroll, "自动滚动", EditorStyles.miniButton, GUILayout.Width(60));
                 }
 
-                var debugWire = bridge.DebugWireLogsEnabled;
-                var newDebugWire = GUILayout.Toggle(debugWire, "调试通信", EditorStyles.miniButton, GUILayout.Width(70));
-                if (newDebugWire != debugWire)
+                EditorGUILayout.Space(2);
+                using (new EditorGUILayout.HorizontalScope())
                 {
-                    bridge.DebugWireLogsEnabled = newDebugWire;
-                    ShowToast(newDebugWire ? "已开启调试通信日志（含实时 RAW）" : "已关闭调试通信日志");
-                }
+                    _showInfo    = GUILayout.Toggle(_showInfo,    "Info",    EditorStyles.miniButtonLeft, GUILayout.Width(40));
+                    _showWarn    = GUILayout.Toggle(_showWarn,    "Warn",    EditorStyles.miniButtonMid,  GUILayout.Width(40));
+                    _showError   = GUILayout.Toggle(_showError,   "Error",   EditorStyles.miniButtonMid,  GUILayout.Width(44));
+                    _showCompile = GUILayout.Toggle(_showCompile, "编译",    EditorStyles.miniButtonMid,  GUILayout.Width(44));
+                    _showNetwork = GUILayout.Toggle(_showNetwork, "网络",    EditorStyles.miniButtonRight, GUILayout.Width(44));
 
-                _showInfo    = GUILayout.Toggle(_showInfo,    "Info",    EditorStyles.miniButtonLeft, GUILayout.Width(40));
-                _showWarn    = GUILayout.Toggle(_showWarn,    "Warn",    EditorStyles.miniButtonMid,  GUILayout.Width(40));
-                _showError   = GUILayout.Toggle(_showError,   "Error",   EditorStyles.miniButtonMid,  GUILayout.Width(44));
-                _showCompile = GUILayout.Toggle(_showCompile, "编译",    EditorStyles.miniButtonMid,  GUILayout.Width(44));
-                _showNetwork = GUILayout.Toggle(_showNetwork, "网络",    EditorStyles.miniButtonRight, GUILayout.Width(44));
+                    GUILayout.FlexibleSpace();
 
-                GUILayout.Space(4);
-                _autoScroll = GUILayout.Toggle(_autoScroll, "自动滚动", EditorStyles.miniButton, GUILayout.Width(60));
-                GUILayout.Space(4);
-                if (GUILayout.Button("复制全部", EditorStyles.miniButton, GUILayout.Width(52)))
-                {
-                    CopyFilteredLogs(logs);
-                    ShowToast("已复制过滤后的日志");
-                }
-                GUILayout.Space(2);
-                if (GUILayout.Button("清除", EditorStyles.miniButton, GUILayout.Width(36)))
-                {
-                    bridge.ClearLogs();
-                    ShowToast("日志已清除");
+                    if (GUILayout.Button("复制全部", EditorStyles.miniButton, GUILayout.Width(52)))
+                    {
+                        CopyFilteredLogs(logs);
+                        ShowToast("已复制过滤后的日志");
+                    }
+
+                    if (GUILayout.Button("清除", EditorStyles.miniButton, GUILayout.Width(36)))
+                    {
+                        bridge.ClearLogs();
+                        ShowToast("日志已清除");
+                    }
                 }
             }
         }

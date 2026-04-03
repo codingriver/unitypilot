@@ -101,6 +101,14 @@ namespace SkillEditor.Editor.UnityPilot
     }
 
     [Serializable]
+    internal class DomainReloadPayload
+    {
+        public string phase; // "starting" or "completed"
+        public bool isCompiling;
+        public string playModeState;
+    }
+
+    [Serializable]
     internal class CompileRequestMessage
     {
         public string id;
@@ -210,6 +218,8 @@ namespace SkillEditor.Editor.UnityPilot
         public string[] modifiers;
         public float scrollDeltaX;
         public float scrollDeltaY;
+        public string elementName;
+        public int elementIndex = -1;
     }
 
     [Serializable]
@@ -336,10 +346,58 @@ namespace SkillEditor.Editor.UnityPilot
         public float worldBoundY;
         public float worldBoundWidth;
         public float worldBoundHeight;
+        public float localBoundX;
+        public float localBoundY;
         public bool visible;
         public bool enabled;
         public int childCount;
         public string text;
+        public string value;
+        public string valueType;
+        public bool interactable;
+        public bool isFocused;
+    }
+
+    [Serializable]
+    internal class UIToolkitSetValueMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public UIToolkitSetValuePayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class UIToolkitSetValuePayload
+    {
+        public string targetWindow;
+        public string elementName;
+        public int elementIndex = -1;
+        public string value;
+    }
+
+    [Serializable]
+    internal class UIToolkitInteractMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public UIToolkitInteractPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class UIToolkitInteractPayload
+    {
+        public string targetWindow;
+        public string elementName;
+        public int elementIndex = -1;
+        public string action; // "click", "focus", "blur"
     }
 
     [Serializable]
@@ -357,6 +415,40 @@ namespace SkillEditor.Editor.UnityPilot
         public bool ok;
         public int matchCount;
         public List<UIToolkitElementInfo> matches = new();
+    }
+
+    [Serializable]
+    internal class UIToolkitScrollMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public UIToolkitScrollPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class UIToolkitScrollPayload
+    {
+        public string targetWindow;
+        public string elementName;
+        public int elementIndex = -1;
+        public float scrollToX = -1;
+        public float scrollToY = -1;
+        public float deltaX;
+        public float deltaY;
+        public string mode = "absolute"; // "absolute" or "delta"
+    }
+
+    [Serializable]
+    internal class UIToolkitScrollResultPayload
+    {
+        public bool ok;
+        public string state;
+        public float scrollOffsetX;
+        public float scrollOffsetY;
     }
 
     [Serializable]

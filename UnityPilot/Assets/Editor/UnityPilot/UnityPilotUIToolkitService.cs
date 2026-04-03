@@ -24,6 +24,9 @@ namespace SkillEditor.Editor.UnityPilot
             _bridge.Router.Register("uitoolkit.dump", HandleDumpAsync);
             _bridge.Router.Register("uitoolkit.query", HandleQueryAsync);
             _bridge.Router.Register("uitoolkit.event", HandleEventAsync);
+            _bridge.Router.Register("uitoolkit.scroll", HandleScrollAsync);
+            _bridge.Router.Register("uitoolkit.setValue", HandleSetValueAsync);
+            _bridge.Router.Register("uitoolkit.interact", HandleInteractAsync);
         }
 
         private async Task HandleDumpAsync(string id, string json, CancellationToken token)
@@ -272,6 +275,211 @@ namespace SkillEditor.Editor.UnityPilot
             return new GenericOkPayload { ok = true, state = $"{eventType}:{target.name}" };
         }
 
+        private async Task HandleScrollAsync(string id, string json, CancellationToken token)
+        {
+            var msg = JsonUtility.FromJson<UIToolkitScrollMessage>(json);
+            var payload = msg?.payload ?? new UIToolkitScrollPayload();
+
+            var tcs = new TaskCompletionSource<UIToolkitScrollResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _bridge.MainThreadQueue.Enqueue(() =>
+            {
+                try { tcs.TrySetResult(PerformScroll(payload)); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+
+            try
+            {
+                var result = await tcs.Task;
+                await _bridge.SendResultAsync(id, "uitoolkit.scroll", result, token);
+            }
+            catch (Exception ex)
+            {
+                await _bridge.SendErrorAsync(id, "INTERNAL_ERROR", $"ScrollView 滚动失败：{ex.Message}", token, "uitoolkit.scroll");
+            }
+        }
+
+        private static UIToolkitScrollResultPayload PerformScroll(UIToolkitScrollPayload payload)
+        {
+            var window = UnityPilotPlayInputService.FindTargetWindow(payload.targetWindow ?? string.Empty);
+            if (window == null)
+                return new UIToolkitScrollResultPayload { ok = false, state = $"WINDOW_NOT_AVAILABLE:{payload.targetWindow}" };
+
+            var root = window.rootVisualElement;
+            if (root == null)
+                return new UIToolkitScrollResultPayload { ok = false, state = "NO_UITOOLKIT_ROOT" };
+
+            // Find ScrollView — by element name, element index, or first ScrollView found
+            ScrollView scrollView = null;
+            if (!string.IsNullOrEmpty(payload.elementName))
+                scrollView = root.Q<ScrollView>(name: payload.elementName);
+
+            if (scrollView == null && payload.elementIndex >= 0)
+            {
+                var allSv = root.Query<ScrollView>().ToList();
+                if (payload.elementIndex < allSv.Count)
+                    scrollView = allSv[payload.elementIndex];
+            }
+
+            if (scrollView == null)
+                scrollView = root.Q<ScrollView>();
+
+            if (scrollView == null)
+                return new UIToolkitScrollResultPayload { ok = false, state = "SCROLLVIEW_NOT_FOUND" };
+
+            if (payload.mode == "delta")
+            {
+                scrollView.scrollOffset += new Vector2(payload.deltaX, payload.deltaY);
+            }
+            else
+            {
+                var offset = scrollView.scrollOffset;
+                if (payload.scrollToX >= 0) offset.x = payload.scrollToX;
+                if (payload.scrollToY >= 0) offset.y = payload.scrollToY;
+                scrollView.scrollOffset = offset;
+            }
+
+            var final = scrollView.scrollOffset;
+            return new UIToolkitScrollResultPayload
+            {
+                ok = true,
+                state = "scrolled",
+                scrollOffsetX = final.x,
+                scrollOffsetY = final.y,
+            };
+        }
+
+        private async Task HandleSetValueAsync(string id, string json, CancellationToken token)
+        {
+            var msg = JsonUtility.FromJson<UIToolkitSetValueMessage>(json);
+            var payload = msg?.payload ?? new UIToolkitSetValuePayload();
+
+            var tcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _bridge.MainThreadQueue.Enqueue(() =>
+            {
+                try { tcs.TrySetResult(PerformSetValue(payload)); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+
+            try
+            {
+                var result = await tcs.Task;
+                await _bridge.SendResultAsync(id, "uitoolkit.setValue", result, token);
+            }
+            catch (Exception ex)
+            {
+                await _bridge.SendErrorAsync(id, "INTERNAL_ERROR", $"设置元素值失败：{ex.Message}", token, "uitoolkit.setValue");
+            }
+        }
+
+        private static GenericOkPayload PerformSetValue(UIToolkitSetValuePayload payload)
+        {
+            var window = UnityPilotPlayInputService.FindTargetWindow(payload.targetWindow ?? "");
+            if (window == null)
+                return new GenericOkPayload { ok = false, state = $"WINDOW_NOT_AVAILABLE:{payload.targetWindow}" };
+
+            var root = window.rootVisualElement;
+            if (root == null)
+                return new GenericOkPayload { ok = false, state = "NO_UITOOLKIT_ROOT" };
+
+            var target = ResolveTargetElement(root, payload.elementName, payload.elementIndex);
+            if (target == null)
+                return new GenericOkPayload { ok = false, state = "TARGET_ELEMENT_NOT_FOUND" };
+
+            var v = payload.value ?? "";
+
+            switch (target)
+            {
+                case TextField tf:
+                    tf.value = v;
+                    return new GenericOkPayload { ok = true, state = $"set:TextField:{v}" };
+                case Toggle tg:
+                    tg.value = v == "true" || v == "True" || v == "1";
+                    return new GenericOkPayload { ok = true, state = $"set:Toggle:{tg.value}" };
+                case SliderInt si:
+                    if (int.TryParse(v, out var iv)) si.value = iv;
+                    return new GenericOkPayload { ok = true, state = $"set:SliderInt:{si.value}" };
+                case Slider sl:
+                    if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var fv)) sl.value = fv;
+                    return new GenericOkPayload { ok = true, state = $"set:Slider:{sl.value}" };
+                case DropdownField dd:
+                    dd.value = v;
+                    return new GenericOkPayload { ok = true, state = $"set:DropdownField:{v}" };
+                case IntegerField intf:
+                    if (int.TryParse(v, out var ifv)) intf.value = ifv;
+                    return new GenericOkPayload { ok = true, state = $"set:IntegerField:{intf.value}" };
+                case FloatField ff:
+                    if (float.TryParse(v, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var ffv)) ff.value = ffv;
+                    return new GenericOkPayload { ok = true, state = $"set:FloatField:{ff.value}" };
+                case Foldout fo:
+                    fo.value = v == "true" || v == "True" || v == "1";
+                    return new GenericOkPayload { ok = true, state = $"set:Foldout:{fo.value}" };
+                default:
+                    return new GenericOkPayload { ok = false, state = $"UNSUPPORTED_ELEMENT_TYPE:{target.GetType().Name}" };
+            }
+        }
+
+        private async Task HandleInteractAsync(string id, string json, CancellationToken token)
+        {
+            var msg = JsonUtility.FromJson<UIToolkitInteractMessage>(json);
+            var payload = msg?.payload ?? new UIToolkitInteractPayload();
+
+            var tcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _bridge.MainThreadQueue.Enqueue(() =>
+            {
+                try { tcs.TrySetResult(PerformInteract(payload)); }
+                catch (Exception ex) { tcs.TrySetException(ex); }
+            });
+
+            try
+            {
+                var result = await tcs.Task;
+                await _bridge.SendResultAsync(id, "uitoolkit.interact", result, token);
+            }
+            catch (Exception ex)
+            {
+                await _bridge.SendErrorAsync(id, "INTERNAL_ERROR", $"元素交互失败：{ex.Message}", token, "uitoolkit.interact");
+            }
+        }
+
+        private static GenericOkPayload PerformInteract(UIToolkitInteractPayload payload)
+        {
+            var window = UnityPilotPlayInputService.FindTargetWindow(payload.targetWindow ?? "");
+            if (window == null)
+                return new GenericOkPayload { ok = false, state = $"WINDOW_NOT_AVAILABLE:{payload.targetWindow}" };
+
+            var root = window.rootVisualElement;
+            if (root == null)
+                return new GenericOkPayload { ok = false, state = "NO_UITOOLKIT_ROOT" };
+
+            window.Focus();
+
+            var target = ResolveTargetElement(root, payload.elementName, payload.elementIndex);
+            if (target == null)
+                return new GenericOkPayload { ok = false, state = "TARGET_ELEMENT_NOT_FOUND" };
+
+            var action = (payload.action ?? "click").ToLowerInvariant();
+
+            switch (action)
+            {
+                case "click":
+                    var center = target.worldBound.center;
+                    var imguiDown = new Event { type = EventType.MouseDown, mousePosition = center, button = 0 };
+                    using (var down = MouseDownEvent.GetPooled(imguiDown)) { target.SendEvent(down); }
+                    var imguiUp = new Event { type = EventType.MouseUp, mousePosition = center, button = 0 };
+                    using (var up = MouseUpEvent.GetPooled(imguiUp)) { target.SendEvent(up); }
+                    using (var click = ClickEvent.GetPooled()) { click.target = target; target.SendEvent(click); }
+                    return new GenericOkPayload { ok = true, state = $"clicked:{target.name}:{target.GetType().Name}" };
+                case "focus":
+                    target.Focus();
+                    return new GenericOkPayload { ok = true, state = $"focused:{target.name}" };
+                case "blur":
+                    target.Blur();
+                    return new GenericOkPayload { ok = true, state = $"blurred:{target.name}" };
+                default:
+                    return new GenericOkPayload { ok = false, state = $"UNKNOWN_ACTION:{action}" };
+            }
+        }
+
         private static List<UIToolkitElementInfo> BuildFlatTree(VisualElement root, int maxDepth)
         {
             var result = new List<UIToolkitElementInfo>();
@@ -298,8 +506,13 @@ namespace SkillEditor.Editor.UnityPilot
         private static UIToolkitElementInfo ToElementInfo(VisualElement element, int index, int parentIndex, int depth)
         {
             var rect = element.worldBound;
+            var localRect = element.localBound;
             var classes = string.Join(" ", element.GetClasses().ToArray());
             var text = element is TextElement textElement ? textElement.text : string.Empty;
+            ExtractValue(element, out var value, out var valueType, out var interactable);
+
+            var isFocused = false;
+            try { isFocused = element.focusController?.focusedElement == element; } catch { }
 
             return new UIToolkitElementInfo
             {
@@ -313,11 +526,93 @@ namespace SkillEditor.Editor.UnityPilot
                 worldBoundY = rect.y,
                 worldBoundWidth = rect.width,
                 worldBoundHeight = rect.height,
+                localBoundX = localRect.x,
+                localBoundY = localRect.y,
                 visible = element.visible,
                 enabled = element.enabledSelf,
                 childCount = element.hierarchy.childCount,
                 text = text,
+                value = value,
+                valueType = valueType,
+                interactable = interactable,
+                isFocused = isFocused,
             };
+        }
+
+        private static void ExtractValue(VisualElement element, out string value, out string valueType, out bool interactable)
+        {
+            value = "";
+            valueType = "";
+            interactable = false;
+
+            switch (element)
+            {
+                case TextField tf:
+                    value = tf.value ?? "";
+                    valueType = "string";
+                    interactable = true;
+                    break;
+                case Toggle tg:
+                    value = tg.value.ToString();
+                    valueType = "bool";
+                    interactable = true;
+                    break;
+                case SliderInt si:
+                    value = si.value.ToString();
+                    valueType = "int";
+                    interactable = true;
+                    break;
+                case Slider sl:
+                    value = sl.value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    valueType = "float";
+                    interactable = true;
+                    break;
+                case MinMaxSlider mms:
+                    value = $"{mms.minValue},{mms.maxValue}";
+                    valueType = "minmax";
+                    interactable = true;
+                    break;
+                case DropdownField dd:
+                    value = dd.value ?? "";
+                    valueType = "dropdown";
+                    interactable = true;
+                    break;
+                case EnumField ef:
+                    value = ef.value?.ToString() ?? "";
+                    valueType = "enum";
+                    interactable = true;
+                    break;
+                case Foldout fo:
+                    value = fo.value.ToString();
+                    valueType = "bool";
+                    interactable = true;
+                    break;
+                case IntegerField intf:
+                    value = intf.value.ToString();
+                    valueType = "int";
+                    interactable = true;
+                    break;
+                case FloatField ff:
+                    value = ff.value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    valueType = "float";
+                    interactable = true;
+                    break;
+                case ProgressBar pb:
+                    value = pb.value.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                    valueType = "float";
+                    break;
+                case Button _:
+                    valueType = "button";
+                    interactable = true;
+                    break;
+                default:
+                    if (element is TextElement te && !string.IsNullOrEmpty(te.text))
+                    {
+                        value = te.text;
+                        valueType = "label";
+                    }
+                    break;
+            }
         }
 
         private static bool IsMatch(UIToolkitElementInfo info, UIToolkitQueryPayload payload)
