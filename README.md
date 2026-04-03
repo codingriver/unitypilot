@@ -69,7 +69,7 @@ unitypilot-mcp --port 8765
 > **注意**: OpenCode 使用 `"mcp"` 作为顶层键（不是 `"mcpServers"`），命令以**数组**形式提供，环境变量的键名是 `"environment"`（不是 `"env"`）。
 
 ### Claude Desktop / Cursor / Windsurf
-在 `.mcp.json` 配置文件中添加：
+将仓库中的 `mcp.example.json` 复制为项目根目录的 `.mcp.json`，或使用 Cursor 时在项目下创建 `.cursor/mcp.json`（把示例中的 `<PATH_TO_UNITYPILOT_REPO>` 换成本机绝对路径）。在配置文件中添加或合并为：
 ```json
 {
   "mcpServers": {
@@ -308,7 +308,7 @@ unitypilot-mcp --port 8765
   - 答：Unity 编辑器在进行编译或处理大量资源时可能会暂时失去响应。请检查 Unity 编辑器是否卡住，或尝试增加 AI 工具的超时设置。
 
 - **问：OpenCode 和 Claude Code 配置格式有什么区别？**
-  - 答：OpenCode 使用 `opencode.json`，顶层键为 `"mcp"`，需要 `"type": "local"` 字段，命令以数组形式提供，环境变量键名为 `"environment"`；Claude Code 使用 `.mcp.json`，顶层键为 `"mcpServers"`，命令和参数分别写在 `"command"` 和 `"args"` 中，环境变量键名为 `"env"`。详见上方配置指南。
+  - 答：OpenCode 使用 `opencode.json`，顶层键为 `"mcp"`，需要 `"type": "local"` 字段，命令以数组形式提供，环境变量键名为 `"environment"`；Claude Code / Cursor 等可使用项目根目录的 `.mcp.json` 或 Cursor 的 `.cursor/mcp.json`，顶层键为 `"mcpServers"`，命令和参数分别写在 `"command"` 和 `"args"` 中，环境变量键名为 `"env"`。可从仓库中的 `mcp.example.json` 复制后改路径。详见上方配置指南。
 
 ## 开源协议
 

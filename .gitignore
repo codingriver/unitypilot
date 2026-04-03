@@ -20,12 +20,14 @@ build/
 # --- Logs ---
 *.log
 
-# --- OS / IDE ---
+# --- OS / IDE / 工具本地配置（勿提交）---
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/*
-!.vscode/extensions.json
+.cursor/
+.opencode/
+.vscode/
+.mcp.json
 *.swp
 *.swo
 
