@@ -25,6 +25,8 @@ build/
 Thumbs.db
 .idea/
 .cursor/
+# Cursor MCP 工具/资源描述缓存（IDE 用，打包与运行 unitypilot-mcp 不需要）
+mcps/
 .opencode/
 .vscode/
 .mcp.json
