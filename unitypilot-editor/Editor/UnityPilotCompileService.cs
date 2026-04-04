@@ -17,6 +17,9 @@ namespace codingriver.unity.pilot
         private int _lastWarningCount;
         private string _lastRequestId = string.Empty;
 
+        /// <summary>Active MCP compile.request id, or empty when compile was not started via MCP.</summary>
+        public string LastRequestId => _lastRequestId;
+
         private TaskCompletionSource<bool> _compileTcs;
         private Action<string, CompilerMessage[]> _assemblyFinishedHandler;
         private Action<object> _compilationFinishedHandler;

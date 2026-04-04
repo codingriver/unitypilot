@@ -218,6 +218,8 @@ namespace codingriver.unity.pilot
         private long                 _lastHeartbeatSentAt;
         private string               _activeSceneName = string.Empty;
         private long                 _pipelineCompileStartUtcMs;
+        private string               _pipelineCompileStatusRequestId = string.Empty;
+        private bool                 _pipelineCompileFromMcp;
         private string               _wsHost = DefaultWsHost;
         private int                  _wsPort = DefaultWsPort;
         private bool                 _debugWireLogsEnabled;
@@ -814,26 +816,8 @@ namespace codingriver.unity.pilot
                 return;
             }
 
-            // Report "started"
-            var startedPayload = _compileService.BuildStartedStatusPayload(requestId);
-            await SendEventAsync(
-                $"evt-compile-status-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                "compile.status", startedPayload, token);
-
-            var lifeStarted = new CompileLifecyclePayload
-            {
-                phase = "started",
-                requestId = requestId,
-                source = "mcp",
-                startedAt = startedPayload.startedAt,
-                finishedAt = 0,
-                errorCount = 0,
-                warningCount = 0,
-                durationMs = 0,
-            };
-            await SendEventAsync(
-                $"evt-compile-started-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                "compile.started", lifeStarted, token);
+            // compile.status / compile.started / compile.finished / compile.errors are pushed from
+            // OnCompilationStarted / SendCompileFinishedMcpPushAsync for every compilation cycle.
 
             opCtx?.Step("等待编译完成", "超时120s");
             var compileTask = _compileService.WaitForCompileAsync();
@@ -846,34 +830,6 @@ namespace codingriver.unity.pilot
             }
 
             opCtx?.Step("编译完成，发送结果");
-            var finishedPayload = _compileService.BuildFinishedStatusPayload(requestId);
-            await SendEventAsync(
-                $"evt-compile-status-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                "compile.status", finishedPayload, token);
-
-            var dur = finishedPayload.finishedAt > 0 && finishedPayload.startedAt > 0
-                ? finishedPayload.finishedAt - finishedPayload.startedAt
-                : 0L;
-            var lifeFinished = new CompileLifecyclePayload
-            {
-                phase = "finished",
-                requestId = requestId,
-                source = "mcp",
-                startedAt = finishedPayload.startedAt,
-                finishedAt = finishedPayload.finishedAt,
-                errorCount = finishedPayload.errorCount,
-                warningCount = finishedPayload.warningCount,
-                durationMs = dur,
-            };
-            await SendEventAsync(
-                $"evt-compile-finished-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                "compile.finished", lifeFinished, token);
-
-            var errorsPayload = _compileService.BuildCompileErrorsPayload(requestId);
-            await SendEventAsync(
-                $"evt-compile-errors-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
-                "compile.errors", errorsPayload, token);
-
             var accepted = new CompileAcceptedPayload { accepted = true, compileRequestId = requestId };
             await SendResultAsync(id, "compile.request", accepted, token);
         }
@@ -1179,6 +1135,22 @@ namespace codingriver.unity.pilot
             }
         }
 
+        /// <summary>Push editor.state only (no compile.errors) — used around compile start/end to avoid duplicate error snapshots.</summary>
+        private async Task SendEditorStateOnlyAsync(CancellationToken token)
+        {
+            if (_ws?.State != WebSocketState.Open || !_isAuthenticated) return;
+            var payload = new EditorStatePayload
+            {
+                connected = true,
+                isCompiling = _compileService.IsCompiling,
+                playModeState = _playInputService.CurrentPlayModeChangedPayload().state,
+                activeScene = _activeSceneName,
+            };
+            await SendEventAsync(
+                $"evt-editor-state-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "editor.state", payload, token);
+        }
+
         private async Task SendPlayModeChangedEventAsync(CancellationToken token)
         {
             await SendEventAsync(
@@ -1245,12 +1217,21 @@ namespace codingriver.unity.pilot
         private void OnCompilationStarted(object _)
         {
             _pipelineCompileStartUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            _pipelineCompileFromMcp = _compileService.IsCompiling && !string.IsNullOrEmpty(_compileService.LastRequestId);
+            _pipelineCompileStatusRequestId = _pipelineCompileFromMcp
+                ? _compileService.LastRequestId
+                : $"editor-{_pipelineCompileStartUtcMs}";
             AddLog("info", "Unity 开始编译");
             UnityPilotOperationTracker.Instance.RecordSystemEvent(
                 "sys.compile.start", "Unity编译开始",
                 $"ws={(_ws?.State == WebSocketState.Open ? "连接中" : "未连接")}");
             var tok = _cts?.Token ?? CancellationToken.None;
-            _ = SendCompilePipelineEventAsync(
+            _ = SendCompileStartedMcpPushAsync(tok);
+        }
+
+        private async Task SendCompileStartedMcpPushAsync(CancellationToken token)
+        {
+            await SendCompilePipelineEventAsync(
                 "compile.pipeline.started",
                 new CompilePipelinePayload
                 {
@@ -1259,7 +1240,47 @@ namespace codingriver.unity.pilot
                     startedAt = _pipelineCompileStartUtcMs,
                     durationMs = 0,
                 },
-                tok);
+                token);
+
+            if (_ws?.State != WebSocketState.Open || !_isAuthenticated) return;
+
+            CompileStatusPayload startedStatus;
+            if (_pipelineCompileFromMcp)
+                startedStatus = _compileService.BuildStartedStatusPayload(_compileService.LastRequestId);
+            else
+                startedStatus = new CompileStatusPayload
+                {
+                    requestId = _pipelineCompileStatusRequestId,
+                    status = "started",
+                    errorCount = 0,
+                    warningCount = 0,
+                    startedAt = _pipelineCompileStartUtcMs,
+                    finishedAt = 0,
+                };
+
+            await SendEventAsync(
+                $"evt-compile-status-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "compile.status",
+                startedStatus,
+                token);
+
+            var lifeStarted = new CompileLifecyclePayload
+            {
+                phase = "started",
+                requestId = _pipelineCompileStatusRequestId,
+                source = _pipelineCompileFromMcp ? "mcp" : "editor",
+                startedAt = startedStatus.startedAt,
+                finishedAt = 0,
+                errorCount = 0,
+                warningCount = 0,
+                durationMs = 0,
+            };
+            await SendEventAsync(
+                $"evt-compile-started-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "compile.started",
+                lifeStarted,
+                token);
+            await SendEditorStateOnlyAsync(token);
         }
 
         private void OnCompilationFinished(object _)
@@ -1282,15 +1303,46 @@ namespace codingriver.unity.pilot
                 },
                 tok);
 
-            var wsOpen = _ws?.State == WebSocketState.Open;
-            if (!wsOpen)
+            _mainThreadQueue.Enqueue(() =>
             {
-                AddLog("info", "Unity 编译完成（未发送，WS 未连接）");
-                return;
-            }
+                _ = SendCompileFinishedMcpPushAsync(tok, duration);
+            });
+        }
+
+        private async Task SendCompileFinishedMcpPushAsync(CancellationToken token, long pipelineDurationMs)
+        {
+            if (_ws?.State != WebSocketState.Open || !_isAuthenticated) return;
+
+            var finishedPayload = _compileService.BuildFinishedStatusPayload(_pipelineCompileStatusRequestId);
+            await SendEventAsync(
+                $"evt-compile-status-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "compile.status",
+                finishedPayload,
+                token);
+
+            var dur = finishedPayload.finishedAt > 0 && finishedPayload.startedAt > 0
+                ? finishedPayload.finishedAt - finishedPayload.startedAt
+                : pipelineDurationMs;
+            var lifeFinished = new CompileLifecyclePayload
+            {
+                phase = "finished",
+                requestId = _pipelineCompileStatusRequestId,
+                source = _pipelineCompileFromMcp ? "mcp" : "editor",
+                startedAt = finishedPayload.startedAt,
+                finishedAt = finishedPayload.finishedAt,
+                errorCount = finishedPayload.errorCount,
+                warningCount = finishedPayload.warningCount,
+                durationMs = dur,
+            };
+            await SendEventAsync(
+                $"evt-compile-finished-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "compile.finished",
+                lifeFinished,
+                token);
 
             AddLog("info", "Unity 编译完成，准备发送 compile.errors");
-            _ = SendCompileFinishedSnapshotAsync(tok);
+            await SendCompileFinishedSnapshotAsync(token);
+            await SendEditorStateOnlyAsync(token);
         }
 
         private async Task SendCompilePipelineEventAsync(string eventName, CompilePipelinePayload payload, CancellationToken token)

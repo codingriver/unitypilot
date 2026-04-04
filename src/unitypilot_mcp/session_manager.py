@@ -38,6 +38,20 @@ class SessionManager:
             self._active.connected = False
         return self._active.connected
 
-    def disconnect(self) -> None:
-        if self._active:
+    def disconnect(self, session_id: str | None = None, *, force: bool = False) -> None:
+        """Mark session disconnected.
+
+        - ``force=True`` (server shutdown): always clear *connected*.
+        - ``session_id`` set: only clear when it matches *active* (stale socket after reconnect).
+        - ``session_id`` is None and not force: no-op (socket died before ``session.hello``).
+        """
+        if not self._active:
+            return
+        if force:
             self._active.connected = False
+            return
+        if session_id is None:
+            return
+        if self._active.session_id != session_id:
+            return
+        self._active.connected = False

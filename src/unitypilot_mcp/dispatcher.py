@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any
 
 from .models import ToolResponse
 from .protocol import new_id
 from .responses import fail, ok
 from .state_store import StateStore
+
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.environ.get(name, str(default)))
+    except ValueError:
+        return default
 
 
 class CommandDispatcher:
@@ -48,7 +56,19 @@ class CommandDispatcher:
 
     async def call(self, request_id: str, name: str, payload: dict[str, Any], timeout_ms: int | None = None) -> ToolResponse:
         if not self.transport.is_ready():
-            return fail(request_id, "UNITY_NOT_CONNECTED", "Unity 未连接", {"command": name})
+            wait_s = _env_float("UNITYPILOT_CALL_WAIT_READY_S", 300.0)
+            waiter = getattr(self.transport, "wait_until_ready", None)
+            if callable(waiter):
+                ok_wait = await waiter(wait_s if wait_s > 0 else 0.0)
+                if not ok_wait:
+                    return fail(
+                        request_id,
+                        "UNITY_NOT_CONNECTED",
+                        "Unity 未连接（等待重连超时，可增大 UNITYPILOT_CALL_WAIT_READY_S）",
+                        {"command": name, "waitReadyS": wait_s},
+                    )
+            else:
+                return fail(request_id, "UNITY_NOT_CONNECTED", "Unity 未连接", {"command": name})
 
         command_id = new_id("cmd")
         self.state.create_command(command_id=command_id, request_id=request_id, name=name, payload=payload)
