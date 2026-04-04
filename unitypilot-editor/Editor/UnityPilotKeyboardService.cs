@@ -52,7 +52,7 @@ namespace codingriver.unity.pilot
             }
 
             var resultTcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

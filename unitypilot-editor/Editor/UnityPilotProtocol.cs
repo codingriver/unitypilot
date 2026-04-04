@@ -30,6 +30,31 @@ namespace codingriver.unity.pilot
     [Serializable]
     internal class HeartbeatPayload { }
 
+    /// <summary>session.hello 成功时服务端 payload（含 MCP 显示名与监听地址）。</summary>
+    [Serializable]
+    internal class HelloAckPayload
+    {
+        public bool accepted;
+        public int heartbeatIntervalMs;
+        public string mcpLabel;
+        public string mcpHost;
+        public int mcpPort;
+        /// <summary>MCP Python 进程当前工作目录绝对路径（通常为 Cursor 打开的仓库根目录）。</summary>
+        public string mcpWorkingDirectory;
+    }
+
+    [Serializable]
+    internal class HelloAckMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public HelloAckPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
     [Serializable]
     internal class HelloMessage
     {
@@ -165,6 +190,48 @@ namespace codingriver.unity.pilot
         public string requestId;
         public int total;
         public List<CompileErrorItemPayload> errors = new();
+    }
+
+    /// <summary>MCP-initiated compile lifecycle (explicit compile.started / compile.finished events).</summary>
+    [Serializable]
+    internal class CompileLifecyclePayload
+    {
+        public string phase;
+        public string requestId;
+        public string source;
+        public long startedAt;
+        public long finishedAt;
+        public int errorCount;
+        public int warningCount;
+        public long durationMs;
+    }
+
+    /// <summary>Any script compilation via CompilationPipeline (editor UI or MCP).</summary>
+    [Serializable]
+    internal class CompilePipelinePayload
+    {
+        public string phase;
+        public string source;
+        public long startedAt;
+        public long durationMs;
+    }
+
+    [Serializable]
+    internal class CompileWaitMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public CompileWaitPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class CompileWaitPayload
+    {
+        public int timeoutMs = 120000;
     }
 
     [Serializable]

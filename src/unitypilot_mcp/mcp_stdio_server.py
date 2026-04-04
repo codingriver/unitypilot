@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -47,11 +48,43 @@ def _resolve_config() -> tuple[str, int]:
     return host, port
 
 
+def _workspace_folder_label() -> str:
+    """Folder name of the current working directory (typically the Cursor workspace root)."""
+    try:
+        name = Path.cwd().resolve().name
+    except OSError:
+        return ""
+    return (name or "").strip()[:256]
+
+
+def _resolve_mcp_label() -> str:
+    """Display name for Unity / diagnostics.
+
+    If ``--label`` is present on the command line, its value is used; otherwise the
+    current working directory's folder name (normally the Cursor workspace root).
+    """
+    args = sys.argv[1:]
+    cli_label: str | None = None
+    i = 0
+    while i < len(args):
+        if args[i] == "--label" and i + 1 < len(args):
+            cli_label = args[i + 1].strip()
+            i += 2
+        else:
+            i += 1
+
+    if cli_label is not None:
+        return cli_label[:256]
+
+    return _workspace_folder_label()
+
+
 @asynccontextmanager
 async def _lifespan(app: FastMCP):
     global _orchestrator, _facade
     host, port = _resolve_config()
-    _orchestrator = WsOrchestratorServer(host=host, port=port)
+    mcp_label = _resolve_mcp_label()
+    _orchestrator = WsOrchestratorServer(host=host, port=port, mcp_label=mcp_label)
     _facade = McpToolFacade(_orchestrator)
     task = asyncio.create_task(_orchestrator.start())
     logger.info("unitypilot MCP server started  ws=%s:%s", host, port)
@@ -118,7 +151,12 @@ async def unity_compile_errors(compileRequestId: str = "") -> str:
     return _payload(r)
 
 
-@mcp.tool(description="诊断 MCP 连接/会话/超时/编译状态。")
+@mcp.tool(
+    description=(
+        "诊断 MCP 连接/会话/超时/编译状态。"
+        "返回 paths.unityProjectAbsolute（当前 Unity 工程绝对路径）与 paths.mcpProcessWorkingDirectory（MCP Python 进程当前工作目录，多为 Cursor 工作区根目录）。"
+    ),
+)
 async def unity_mcp_status() -> str:
     r = await _get_facade().mcp_status()
     return _payload(r)
@@ -500,6 +538,20 @@ async def unity_scene_list() -> str:
 @mcp.tool(description="卸载 Unity 场景（可选择从层级视图中移除）。")
 async def unity_scene_unload(scenePath: str, removeScene: bool = False) -> str:
     r = await _get_facade().scene_unload(scene_path=scenePath, remove_scene=removeScene)
+    return _payload(r)
+
+
+@mcp.tool(
+    description=(
+        "确保并打开用于自动化/验收的空场景：若磁盘上已有资源则单场景打开；否则新建 EmptyScene 并保存。"
+        "默认 Assets/unitypilot-test.unity。返回 ensureAction: opened|created 与 scene 信息。"
+    ),
+)
+async def unity_scene_ensure_test(
+    sceneName: str = "unitypilot-test",
+    scenePath: str = "",
+) -> str:
+    r = await _get_facade().scene_ensure_test(scene_name=sceneName, scene_path=scenePath)
     return _payload(r)
 
 
@@ -998,20 +1050,42 @@ async def resource_console_summary() -> str:
 # ── M26 验收自动化工具 ─────────────────────────────────────────────────────
 
 
-@mcp.tool(description="等待 Unity 编译完成。轮询 editorState.isCompiling 直到 false 或超时，返回 status='ready'|'timeout'。")
+@mcp.tool(
+    description=(
+        "等待 Unity 脚本编译结束。优先使用 Bridge 推送的 compile.started/finished 与 compile.pipeline.* 信号（wait_for_compile_idle），"
+        "再以指数退避轮询 resource.editorState。preferEvents=false 可仅用轮询。返回 waitMode：immediate|event|poll|timeout。"
+    ),
+)
 async def unity_compile_wait(
     timeoutS: float = 120,
     pollIntervalS: float = 1.0,
+    preferEvents: bool = True,
 ) -> str:
-    r = await _get_facade().compile_wait(timeout_s=timeoutS, poll_interval_s=pollIntervalS)
+    r = await _get_facade().compile_wait(
+        timeout_s=timeoutS,
+        poll_interval_s=pollIntervalS,
+        prefer_events=preferEvents,
+    )
     return _payload(r)
 
 
-@mcp.tool(description="截取 Unity 编辑器窗口（EditorWindow）画面，返回 Base64 编码的 PNG。通过窗口标题匹配。")
+@mcp.tool(
+    description=(
+        "在 Unity 编辑器侧单命令阻塞等待：直到 EditorApplication.isCompiling 为 false（任意来源的编译）。"
+        "timeoutMs 默认 120000。适合需要与编辑器内部状态严格对齐的场景。"
+    ),
+)
+async def unity_compile_wait_editor(timeoutMs: int = 120000) -> str:
+    r = await _get_facade().compile_wait_editor(timeout_ms=timeoutMs)
+    return _payload(r)
+
+
+@mcp.tool(description="截取 Unity 编辑器窗口（EditorWindow）画面，返回 Base64 编码的 PNG。通过窗口标题匹配。screenshotDegrade: none|auto|scene|minimal — auto 在无法截取窗口时降级为 Scene 视图或占位图。")
 async def unity_screenshot_editor_window(
     windowTitle: str = "UnityPilot",
+    screenshotDegrade: str = "auto",
 ) -> str:
-    r = await _get_facade().screenshot_editor_window(window_title=windowTitle)
+    r = await _get_facade().screenshot_editor_window(window_title=windowTitle, degrade=screenshotDegrade)
     return _payload(r)
 
 
@@ -1021,12 +1095,17 @@ async def unity_batch_diagnostics() -> str:
     return _payload(r)
 
 
-@mcp.tool(description="全自动窗口验收：等编译完成 → 截图（可选） + 窗口布局诊断 + 控制台摘要，一次调用完成所有验收步骤。")
+@mcp.tool(description="全自动窗口验收：等编译完成 → 截图（可选） + 窗口布局诊断 + 控制台摘要，一次调用完成所有验收步骤。screenshotDegrade 同 unity_screenshot_editor_window。")
 async def unity_verify_window(
     windowTitle: str = "UnityPilot",
     includeScreenshot: bool = True,
+    screenshotDegrade: str = "auto",
 ) -> str:
-    r = await _get_facade().verify_window(window_title=windowTitle, include_screenshot=includeScreenshot)
+    r = await _get_facade().verify_window(
+        window_title=windowTitle,
+        include_screenshot=includeScreenshot,
+        screenshot_degrade=screenshotDegrade,
+    )
     return _payload(r)
 
 

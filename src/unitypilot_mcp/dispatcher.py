@@ -13,6 +13,7 @@ class CommandDispatcher:
     DEFAULT_TIMEOUT_MS = 30000
     COMMAND_TIMEOUT_MS: dict[str, int] = {
         "compile.request": 180000,
+        "compile.wait": 660000,
         "compile.errors.get": 45000,
         "test.run": 300000,
         "build.start": 600000,

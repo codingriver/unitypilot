@@ -69,7 +69,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<PrefabResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -132,7 +132,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<PrefabResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -195,7 +195,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -233,7 +233,7 @@ namespace codingriver.unity.pilot
         private async Task HandleCloseAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -272,7 +272,7 @@ namespace codingriver.unity.pilot
         private async Task HandleSaveAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

@@ -88,7 +88,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<MaterialCreateResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -138,7 +138,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -191,7 +191,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -257,7 +257,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<MaterialInfoPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -344,7 +344,7 @@ namespace codingriver.unity.pilot
         private async Task HandleShaderListAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<ShaderListResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

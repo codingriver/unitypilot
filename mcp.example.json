@@ -18,6 +18,7 @@
         "_usage": "复制本文件：项目根目录命名为 .mcp.json；Cursor 可放在 .cursor/mcp.json（自行创建 .cursor 目录）。将全部 <PATH_TO_UNITYPILOT_REPO> 替换为本机仓库绝对路径。",
         "command": "启动命令：用 python 直接运行入口脚本",
         "--port": "WebSocket 监听端口，Unity Editor 需连接同一端口。多项目场景下每个 Cursor 项目配不同端口（如 8765、8766）",
+        "--label": "可选。省略则使用工作区根目录文件夹名；需要自定义显示名时再添加，例如 \"--label\", \"我的项目MCP\"",
         "--log-file": "日志输出文件，留空则仅输出到 stderr",
         "--log-level": "日志级别：DEBUG | INFO | WARNING | ERROR | CRITICAL",
         "PYTHONUTF8": "强制 Python UTF-8 模式，避免中文路径/内容乱码"

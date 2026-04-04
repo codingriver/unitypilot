@@ -73,7 +73,7 @@ namespace codingriver.unity.pilot
             int steps = Mathf.Max(1, p.steps);
 
             var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -104,7 +104,7 @@ namespace codingriver.unity.pilot
             int steps = Mathf.Max(1, p.steps);
 
             var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -140,7 +140,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -176,7 +176,7 @@ namespace codingriver.unity.pilot
             var p = msg?.payload ?? new SceneViewNavigatePayload();
 
             var tcs = new TaskCompletionSource<SceneViewStatePayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

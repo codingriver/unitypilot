@@ -117,7 +117,7 @@ namespace codingriver.unity.pilot
             if (count > 1000) count = 1000;
 
             var tcs = new TaskCompletionSource<ConsoleLogsResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -144,7 +144,7 @@ namespace codingriver.unity.pilot
         private async Task HandleConsoleClearAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

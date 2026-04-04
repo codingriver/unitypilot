@@ -178,7 +178,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<ComponentInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -240,7 +240,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -303,7 +303,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<ComponentInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -357,7 +357,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<ComponentInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -406,7 +406,7 @@ namespace codingriver.unity.pilot
             var goId = msg?.payload?.gameObjectId ?? 0;
 
             var tcs = new TaskCompletionSource<ComponentListResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

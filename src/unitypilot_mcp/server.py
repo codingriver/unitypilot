@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 import websockets
@@ -19,10 +20,17 @@ logger = logging.getLogger("unitypilot.server")
 class WsOrchestratorServer(WsTransport):
     DOMAIN_RELOAD_TIMEOUT_S = 60  # max seconds to wait for Unity to reconnect after domain reload
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8765, heartbeat_interval_ms: int = 2000) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8765,
+        heartbeat_interval_ms: int = 2000,
+        mcp_label: str = "",
+    ) -> None:
         self.host = host
         self.port = port
         self.heartbeat_interval_ms = heartbeat_interval_ms
+        self.mcp_label = (mcp_label or "").strip()
         self.session_manager = SessionManager(heartbeat_timeout_ms=heartbeat_interval_ms * 3)
         self.state = StateStore()
         self._ws: WebSocketServerProtocol | None = None
@@ -30,6 +38,8 @@ class WsOrchestratorServer(WsTransport):
         self._suspended: dict[str, asyncio.Future] = {}  # pending commands suspended during domain reload
         self._domain_reloading = False
         self._reconnect_event = asyncio.Event()
+        self._compile_idle_event = asyncio.Event()
+        self._compile_idle_event.set()
         self._server = None
         self._stop_event = asyncio.Event()
 
@@ -52,6 +62,41 @@ class WsOrchestratorServer(WsTransport):
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def _note_compile_busy(self, busy: bool) -> None:
+        if busy:
+            self._compile_idle_event.clear()
+        else:
+            self._compile_idle_event.set()
+
+    def _sync_compile_idle_from_compile_status(self, payload: dict[str, Any]) -> None:
+        status = str(payload.get("status", "")).lower()
+        if status in ("started", "in_progress", "compiling"):
+            self._note_compile_busy(True)
+        elif status in ("finished", "done", "complete"):
+            self._note_compile_busy(False)
+
+    def reconcile_editor_compile_busy(self, is_compiling: bool) -> None:
+        """When resource.editorState poll disagrees with idle event (e.g. missed pipeline start)."""
+        if is_compiling and self._compile_idle_event.is_set():
+            self._note_compile_busy(True)
+
+    def sync_compile_state_from_editor(self, is_compiling: bool) -> None:
+        """Align idle event with editor truth (used during backoff polling)."""
+        self._note_compile_busy(is_compiling)
+
+    async def wait_for_compile_idle(self, timeout: float | None) -> bool:
+        """Wait until compile idle event is set (compile.finished / pipeline.finished / status finished)."""
+        if self._compile_idle_event.is_set():
+            return True
+        if timeout is None or timeout <= 0:
+            await self._compile_idle_event.wait()
+            return True
+        try:
+            await asyncio.wait_for(self._compile_idle_event.wait(), timeout=timeout)
+            return True
+        except asyncio.TimeoutError:
+            return False
 
     def is_ready(self) -> bool:
         return self._ws is not None and self.session_manager.is_connected()
@@ -127,6 +172,7 @@ class WsOrchestratorServer(WsTransport):
             if self.state.compile.status == "compiling":
                 self.state.compile.status = "unknown"
                 self.state.compile.errors = []
+            self._compile_idle_event.set()
 
     async def _handle_message(self, message) -> None:
         if message.type == "hello" and message.name == "session.hello":
@@ -139,6 +185,7 @@ class WsOrchestratorServer(WsTransport):
             elif self._pending:
                 self._fail_all_pending("SESSION_REPLACED", "Unity 会话已替换，请重试命令")
             self.state.compile = CompileSnapshot()
+            self._compile_idle_event.set()
             self.session_manager.on_hello(message.session_id, message.payload)
             logger.info(
                 "[%s] Session established  unity=%s  project=%s  platform=%s",
@@ -147,11 +194,34 @@ class WsOrchestratorServer(WsTransport):
                 message.payload.get("projectPath", "?"),
                 message.payload.get("platform", "?"),
             )
+            raw_project = str(message.payload.get("projectPath", "") or "").strip()
+            unity_project_path = raw_project
+            if raw_project:
+                try:
+                    unity_project_path = str(Path(raw_project).resolve())
+                except OSError:
+                    unity_project_path = raw_project
+
+            try:
+                mcp_cwd = str(Path.cwd().resolve())
+            except OSError:
+                mcp_cwd = str(Path.cwd())
+
+            hello_payload: dict[str, Any] = {
+                "accepted": True,
+                "heartbeatIntervalMs": self.heartbeat_interval_ms,
+                "mcpHost": self.host,
+                "mcpPort": self.port,
+                "unityProjectPath": unity_project_path,
+                "mcpWorkingDirectory": mcp_cwd,
+            }
+            if self.mcp_label:
+                hello_payload["mcpLabel"] = self.mcp_label
             ack = {
                 "id": message.id,
                 "type": "result",
                 "name": "session.hello",
-                "payload": {"accepted": True, "heartbeatIntervalMs": self.heartbeat_interval_ms},
+                "payload": hello_payload,
                 "timestamp": now_ms(),
                 "sessionId": message.session_id,
                 "protocolVersion": PROTOCOL_VERSION,
@@ -196,6 +266,19 @@ class WsOrchestratorServer(WsTransport):
                 return
             if message.name == "compile.status":
                 self.state.update_compile_status(message.payload)
+                self._sync_compile_idle_from_compile_status(message.payload)
+            elif message.name == "compile.started":
+                self.state.update_compile_lifecycle(message.payload)
+                self._note_compile_busy(True)
+            elif message.name == "compile.finished":
+                self.state.update_compile_lifecycle(message.payload)
+                self._note_compile_busy(False)
+            elif message.name == "compile.pipeline.started":
+                self.state.update_compile_pipeline(message.payload)
+                self._note_compile_busy(True)
+            elif message.name == "compile.pipeline.finished":
+                self.state.update_compile_pipeline(message.payload)
+                self._note_compile_busy(False)
             elif message.name == "compile.errors":
                 self.state.update_compile_errors(message.payload)
             elif message.name == "editor.state":

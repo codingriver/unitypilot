@@ -79,19 +79,20 @@ namespace codingriver.unity.pilot
             }
 
             string identifier = string.IsNullOrEmpty(p.version) ? p.packageName : $"{p.packageName}@{p.version}";
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
+            opCtx?.Step("准备添加包", identifier);
 
             AddRequest request = null;
             var tcs = new TaskCompletionSource<bool>();
 
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 request = Client.Add(identifier);
             });
 
-            // Wait for the request to be created
             await Task.Delay(100, token);
 
-            // Poll for completion
+            opCtx?.Step("等待包管理器完成");
             while (request == null || !request.IsCompleted)
             {
                 token.ThrowIfCancellationRequested();
@@ -128,7 +129,7 @@ namespace codingriver.unity.pilot
             }
 
             RemoveRequest request = null;
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 request = Client.Remove(p.packageName);
             });
@@ -156,7 +157,7 @@ namespace codingriver.unity.pilot
         private async Task HandleListAsync(string id, string json, CancellationToken token)
         {
             ListRequest request = null;
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 request = Client.List(true); // include dependencies
             });
@@ -206,7 +207,7 @@ namespace codingriver.unity.pilot
             }
 
             SearchRequest request = null;
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 request = Client.SearchAll();
             });

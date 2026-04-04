@@ -171,7 +171,7 @@ namespace codingriver.unity.pilot
         private async Task HandleSceneHierarchyAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<SceneHierarchyResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -217,7 +217,7 @@ namespace codingriver.unity.pilot
         private async Task HandleConsoleLogsAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<ConsoleLogsResourcePayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -320,7 +320,7 @@ namespace codingriver.unity.pilot
         private async Task HandleEditorStateAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<EditorStateResourcePayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -357,7 +357,7 @@ namespace codingriver.unity.pilot
         private async Task HandlePackagesAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<PackagesResourcePayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -406,7 +406,7 @@ namespace codingriver.unity.pilot
         private async Task HandleBuildStatusAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<BuildStatusResourcePayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -437,7 +437,7 @@ namespace codingriver.unity.pilot
         private async Task HandleUnityPilotLogsTabAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<UnityPilotLogsTabResourcePayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -482,7 +482,7 @@ namespace codingriver.unity.pilot
         private async Task HandleWindowDiagnosticsAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<WindowDiagnosticsPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -532,7 +532,7 @@ namespace codingriver.unity.pilot
         private async Task HandleConsoleSummaryAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<ConsoleSummaryPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

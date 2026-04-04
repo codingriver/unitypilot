@@ -32,7 +32,7 @@ namespace codingriver.unity.pilot
             var payload = msg?.payload ?? new DragDropPayload();
 
             var tcs = new TaskCompletionSource<DragDropResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

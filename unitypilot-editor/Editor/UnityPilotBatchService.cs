@@ -96,6 +96,7 @@ namespace codingriver.unity.pilot
                 return;
             }
 
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
             string batchId = Guid.NewGuid().ToString("N").Substring(0, 12);
             var cts = CancellationTokenSource.CreateLinkedTokenSource(token);
             cts.CancelAfter(TotalTimeoutMs);
@@ -112,6 +113,7 @@ namespace codingriver.unity.pilot
             _batches[batchId] = batchResult;
 
             string mode = (p.mode ?? "sequential").ToLowerInvariant();
+            opCtx?.Step("开始批量执行", $"batchId={batchId} count={p.operations.Count} mode={mode}");
 
             try
             {
@@ -121,7 +123,7 @@ namespace codingriver.unity.pilot
                 }
                 else
                 {
-                    await ExecuteSequentialAsync(p, batchResult, cts.Token);
+                    await ExecuteSequentialAsync(p, batchResult, opCtx, cts.Token);
                 }
 
                 batchResult.status = batchResult.failed > 0 ? "failed" : "completed";
@@ -155,12 +157,13 @@ namespace codingriver.unity.pilot
             await _bridge.SendResultAsync(id, "batch.execute", batchResult, token);
         }
 
-        private async Task ExecuteSequentialAsync(BatchExecutePayload p, BatchExecuteResultPayload batchResult, CancellationToken ct)
+        private async Task ExecuteSequentialAsync(BatchExecutePayload p, BatchExecuteResultPayload batchResult, OperationContext opCtx, CancellationToken ct)
         {
             for (int i = 0; i < p.operations.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
 
+                opCtx?.Progress((i * 100) / p.operations.Count, $"执行 {i + 1}/{p.operations.Count}: {p.operations[i].tool}");
                 var op = p.operations[i];
                 var opResult = await ExecuteSingleOperationAsync(i, op, ct);
                 batchResult.results.Add(opResult);

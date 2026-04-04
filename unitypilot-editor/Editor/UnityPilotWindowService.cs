@@ -72,7 +72,7 @@ namespace codingriver.unity.pilot
             var filter = msg?.payload ?? new EditorWindowsListFilterPayload();
 
             var tcs = new TaskCompletionSource<EditorWindowsListPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try { tcs.TrySetResult(ListWindows(filter)); }
                 catch (Exception ex) { tcs.TrySetException(ex); }

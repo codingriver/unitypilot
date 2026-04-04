@@ -92,7 +92,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<ReflectionFindResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -173,7 +173,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<ReflectionCallResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

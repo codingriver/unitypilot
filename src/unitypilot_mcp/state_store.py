@@ -23,6 +23,8 @@ class CompileSnapshot:
     warning_count: int = 0
     started_at: int = 0
     finished_at: int = 0
+    last_duration_ms: int = 0
+    pipeline_phase: str = ""  # started | finished when last compile.pipeline.* received
     errors: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -70,10 +72,40 @@ class StateStore:
         self.compile.compile_request_id = str(payload.get("requestId", self.compile.compile_request_id))
         status = str(payload.get("status", self.compile.status))
         self.compile.status = "compiling" if status in ("started", "in_progress", "compiling") else "finished"
+        self.editor.is_compiling = self.compile.status == "compiling"
         self.compile.error_count = int(payload.get("errorCount", self.compile.error_count))
         self.compile.warning_count = int(payload.get("warningCount", self.compile.warning_count))
         self.compile.started_at = int(payload.get("startedAt", self.compile.started_at))
         self.compile.finished_at = int(payload.get("finishedAt", self.compile.finished_at))
+        sa, fa = self.compile.started_at, self.compile.finished_at
+        if fa > 0 and sa > 0 and fa >= sa:
+            self.compile.last_duration_ms = int(fa - sa)
+
+    def update_compile_pipeline(self, payload: dict[str, Any]) -> None:
+        phase = str(payload.get("phase", "")).lower()
+        self.compile.pipeline_phase = phase
+        if phase == "started":
+            self.compile.status = "compiling"
+            self.editor.is_compiling = True
+        elif phase == "finished":
+            self.compile.status = "finished"
+            self.editor.is_compiling = False
+            self.compile.last_duration_ms = int(payload.get("durationMs", self.compile.last_duration_ms))
+
+    def update_compile_lifecycle(self, payload: dict[str, Any]) -> None:
+        phase = str(payload.get("phase", "")).lower()
+        if phase == "started":
+            self.compile.status = "compiling"
+            self.editor.is_compiling = True
+            self.compile.compile_request_id = str(payload.get("requestId", self.compile.compile_request_id))
+            self.compile.started_at = int(payload.get("startedAt", self.compile.started_at))
+        elif phase == "finished":
+            self.compile.status = "finished"
+            self.editor.is_compiling = False
+            self.compile.finished_at = int(payload.get("finishedAt", self.compile.finished_at))
+            self.compile.error_count = int(payload.get("errorCount", self.compile.error_count))
+            self.compile.warning_count = int(payload.get("warningCount", self.compile.warning_count))
+            self.compile.last_duration_ms = int(payload.get("durationMs", self.compile.last_duration_ms))
 
     def update_compile_errors(self, payload: dict[str, Any]) -> None:
         errors = payload.get("errors") or []

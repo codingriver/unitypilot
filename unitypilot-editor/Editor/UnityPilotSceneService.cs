@@ -145,6 +145,35 @@ namespace codingriver.unity.pilot
         public List<SceneInfoPayload> scenes = new();
     }
 
+    [Serializable]
+    internal class SceneEnsureTestMessage
+    {
+        public string id;
+        public string type;
+        public string name;
+        public SceneEnsureTestPayload payload;
+        public long timestamp;
+        public string sessionId;
+        public string protocolVersion;
+    }
+
+    [Serializable]
+    internal class SceneEnsureTestPayload
+    {
+        /// <summary>Short name (e.g. unitypilot-test) or Assets/... path fragment; default unitypilot-test.</summary>
+        public string sceneName = "";
+        /// <summary>If set, takes precedence (must be under Assets/, .unity optional).</summary>
+        public string scenePath = "";
+    }
+
+    [Serializable]
+    internal class SceneEnsureTestResultPayload
+    {
+        /// <summary>opened | created</summary>
+        public string ensureAction = "";
+        public SceneInfoPayload scene;
+    }
+
     // ── M09 Scene Service ─────────────────────────────────────────────────────
 
     internal sealed class UnityPilotSceneService
@@ -165,6 +194,98 @@ namespace codingriver.unity.pilot
             _bridge.Router.Register("scene.setActive", HandleSceneSetActiveAsync);
             _bridge.Router.Register("scene.list",      HandleSceneListAsync);
             _bridge.Router.Register("scene.unload",    HandleSceneUnloadAsync);
+            _bridge.Router.Register("scene.ensureTest", HandleSceneEnsureTestAsync);
+        }
+
+        // ── scene.ensureTest — empty test scene: open if asset exists, else create + save ──
+
+        private async Task HandleSceneEnsureTestAsync(string id, string json, CancellationToken token)
+        {
+            var msg   = JsonUtility.FromJson<SceneEnsureTestMessage>(json);
+            var payload = msg?.payload ?? new SceneEnsureTestPayload();
+
+            var tcs = new TaskCompletionSource<SceneEnsureTestResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _bridge.EnqueueTracked(id, () =>
+            {
+                try
+                {
+                    var path = ResolveEnsureTestScenePath(payload);
+                    SceneEnsureTestResultPayload result;
+
+                    if (System.IO.File.Exists(path))
+                    {
+                        var scene = EditorSceneManager.OpenScene(path, OpenSceneMode.Single);
+                        result = new SceneEnsureTestResultPayload
+                        {
+                            ensureAction = "opened",
+                            scene        = BuildSceneInfo(scene),
+                        };
+                    }
+                    else
+                    {
+                        var dir = System.IO.Path.GetDirectoryName(path);
+                        if (!string.IsNullOrEmpty(dir) && !System.IO.Directory.Exists(dir))
+                            System.IO.Directory.CreateDirectory(dir);
+
+                        var newScene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
+                        if (!EditorSceneManager.SaveScene(newScene, path))
+                        {
+                            tcs.TrySetException(new System.Exception($"保存空测试场景失败：{path}"));
+                            return;
+                        }
+
+                        AssetDatabase.Refresh();
+                        var active = SceneManager.GetActiveScene();
+                        result = new SceneEnsureTestResultPayload
+                        {
+                            ensureAction = "created",
+                            scene        = BuildSceneInfo(active),
+                        };
+                    }
+
+                    tcs.TrySetResult(result);
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            });
+
+            try
+            {
+                var result = await tcs.Task;
+                await _bridge.SendResultAsync(id, "scene.ensureTest", result, token);
+                _bridge.AddLog("info", $"[Scene] ensureTest: {result.ensureAction} → {result.scene.scenePath}");
+            }
+            catch (Exception ex)
+            {
+                await _bridge.SendErrorAsync(id, "SCENE_ENSURE_TEST_FAILED", ex.Message, token, "scene.ensureTest");
+            }
+        }
+
+        private static string ResolveEnsureTestScenePath(SceneEnsureTestPayload payload)
+        {
+            if (!string.IsNullOrEmpty(payload.scenePath))
+            {
+                var p = payload.scenePath.Trim().Replace('\\', '/');
+                if (!p.EndsWith(".unity", StringComparison.OrdinalIgnoreCase))
+                    p += ".unity";
+                if (!p.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                    p = "Assets/" + p.TrimStart('/');
+                return p;
+            }
+
+            var raw = string.IsNullOrEmpty(payload.sceneName) ? "unitypilot-test" : payload.sceneName.Trim();
+            raw = raw.Replace('\\', '/');
+            if (raw.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                return raw.EndsWith(".unity", StringComparison.OrdinalIgnoreCase) ? raw : raw + ".unity";
+            if (raw.Contains("/"))
+            {
+                var p = "Assets/" + raw.TrimStart('/');
+                return p.EndsWith(".unity", StringComparison.OrdinalIgnoreCase) ? p : p + ".unity";
+            }
+
+            return "Assets/" + raw + ".unity";
         }
 
         // ── scene.create ──────────────────────────────────────────────────────
@@ -175,7 +296,7 @@ namespace codingriver.unity.pilot
             var sceneName = msg?.payload?.sceneName ?? "";
 
             var tcs = new TaskCompletionSource<SceneInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -225,7 +346,7 @@ namespace codingriver.unity.pilot
             var openMode = ParseOpenSceneMode(modeStr);
 
             var tcs = new TaskCompletionSource<SceneInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -263,7 +384,7 @@ namespace codingriver.unity.pilot
             var scenePath = msg?.payload?.scenePath ?? "";
 
             var tcs = new TaskCompletionSource<SceneInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -327,7 +448,7 @@ namespace codingriver.unity.pilot
             var openMode = ParseOpenSceneMode(modeStr);
 
             var tcs = new TaskCompletionSource<SceneInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -371,7 +492,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<SceneInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -407,7 +528,7 @@ namespace codingriver.unity.pilot
         private async Task HandleSceneListAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<SceneListResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -452,7 +573,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<SceneInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

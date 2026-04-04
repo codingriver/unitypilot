@@ -73,6 +73,7 @@ namespace codingriver.unity.pilot
 
         private async Task HandleStartAsync(string id, string json, CancellationToken token)
         {
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
             var msg = JsonUtility.FromJson<BuildStartMessage>(json);
             var p   = msg?.payload ?? new BuildStartPayload();
 
@@ -94,7 +95,8 @@ namespace codingriver.unity.pilot
                 return;
             }
 
-            // Parse build target
+            opCtx?.Step("参数校验通过", $"target={p.buildTarget} output={p.outputPath}");
+
             if (!TryParseBuildTarget(p.buildTarget, out BuildTarget target))
             {
                 await _bridge.SendErrorAsync(id, "INVALID_PARAMS", $"Unknown build target: {p.buildTarget}", token, "build.start");
@@ -124,6 +126,7 @@ namespace codingriver.unity.pilot
                 return;
             }
 
+            opCtx?.Step("开始构建", $"target={target} scenes={scenes.Length}");
             _buildCts = CancellationTokenSource.CreateLinkedTokenSource(token);
             _isBuildingAsync = true;
 
@@ -136,7 +139,7 @@ namespace codingriver.unity.pilot
 
             // Build on main thread
             var tcs = new TaskCompletionSource<BuildStatusPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -258,7 +261,7 @@ namespace codingriver.unity.pilot
         private async Task HandleTargetsAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<BuildTargetsResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

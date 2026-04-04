@@ -107,7 +107,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<AssetFindResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -155,7 +155,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<string>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -204,7 +204,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -252,7 +252,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -294,7 +294,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -327,7 +327,7 @@ namespace codingriver.unity.pilot
         private async Task HandleRefreshAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -362,7 +362,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<AssetInfoPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -397,7 +397,7 @@ namespace codingriver.unity.pilot
             var p   = msg?.payload ?? new AssetGetDataPayload();
 
             var tcs = new TaskCompletionSource<AssetGetDataResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -480,7 +480,7 @@ namespace codingriver.unity.pilot
             var p   = msg?.payload ?? new AssetModifyDataPayload();
 
             var tcs = new TaskCompletionSource<AssetModifyDataResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -570,7 +570,7 @@ namespace codingriver.unity.pilot
             var p   = msg?.payload ?? new AssetFindBuiltInPayload();
 
             var tcs = new TaskCompletionSource<AssetFindBuiltInResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

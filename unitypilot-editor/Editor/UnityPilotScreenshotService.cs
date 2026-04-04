@@ -93,7 +93,7 @@ namespace codingriver.unity.pilot
             var title = msg?.payload?.windowTitle ?? "UnityPilot";
 
             var tcs = new TaskCompletionSource<string>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -142,7 +142,7 @@ namespace codingriver.unity.pilot
             int qual   = Clamp(p.quality, 1, 100, 75);
 
             var tcs = new TaskCompletionSource<string>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -197,7 +197,7 @@ namespace codingriver.unity.pilot
             int qual   = Clamp(p.quality, 1, 100, 75);
 
             var tcs = new TaskCompletionSource<string>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -252,7 +252,7 @@ namespace codingriver.unity.pilot
             int qual   = Clamp(p.quality, 1, 100, 75);
 
             var tcs = new TaskCompletionSource<string>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

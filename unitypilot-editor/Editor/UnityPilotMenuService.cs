@@ -65,7 +65,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -96,7 +96,7 @@ namespace codingriver.unity.pilot
         private async Task HandleListAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<MenuListResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

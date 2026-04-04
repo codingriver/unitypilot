@@ -71,6 +71,7 @@ namespace codingriver.unity.pilot
 
         private async Task HandleRunAsync(string id, string json, CancellationToken token)
         {
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
             var msg = JsonUtility.FromJson<TestRunMessage>(json);
             var p   = msg?.payload ?? new TestRunPayload();
 
@@ -81,9 +82,11 @@ namespace codingriver.unity.pilot
             }
 
             string mode = NormalizeTestMode(p.testMode);
+            var filterDesc = p.testFilter ?? "(all)";
+            opCtx?.Step("准备运行测试", $"mode={mode} filter={filterDesc}");
 
             var tcs = new TaskCompletionSource<TestRunResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -227,7 +230,7 @@ namespace codingriver.unity.pilot
             string mode = NormalizeTestMode(p.testMode);
 
             var tcs = new TaskCompletionSource<TestListResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

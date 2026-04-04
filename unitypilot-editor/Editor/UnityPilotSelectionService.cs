@@ -51,7 +51,7 @@ namespace codingriver.unity.pilot
         private async Task HandleGetAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<SelectionResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try { tcs.SetResult(BuildSelectionResult()); }
                 catch (Exception ex) { tcs.SetException(ex); }
@@ -76,7 +76,7 @@ namespace codingriver.unity.pilot
             var p   = msg?.payload ?? new SelectionSetPayload();
 
             var tcs = new TaskCompletionSource<SelectionResultPayload>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -125,7 +125,7 @@ namespace codingriver.unity.pilot
         private async Task HandleClearAsync(string id, string json, CancellationToken token)
         {
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

@@ -43,7 +43,7 @@ namespace codingriver.unity.pilot
             var maxDepth = payload.maxDepth <= 0 ? 10 : payload.maxDepth;
 
             var tcs = new TaskCompletionSource<UIToolkitDumpResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -73,7 +73,7 @@ namespace codingriver.unity.pilot
             var payload = msg?.payload ?? new UIToolkitQueryPayload();
 
             var tcs = new TaskCompletionSource<UIToolkitQueryResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -114,7 +114,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -286,7 +286,7 @@ namespace codingriver.unity.pilot
             var payload = msg?.payload ?? new UIToolkitScrollPayload();
 
             var tcs = new TaskCompletionSource<UIToolkitScrollResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try { tcs.TrySetResult(PerformScroll(payload)); }
                 catch (Exception ex) { tcs.TrySetException(ex); }
@@ -359,7 +359,7 @@ namespace codingriver.unity.pilot
             var payload = msg?.payload ?? new UIToolkitSetValuePayload();
 
             var tcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try { tcs.TrySetResult(PerformSetValue(payload)); }
                 catch (Exception ex) { tcs.TrySetException(ex); }
@@ -429,7 +429,7 @@ namespace codingriver.unity.pilot
             var payload = msg?.payload ?? new UIToolkitInteractPayload();
 
             var tcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try { tcs.TrySetResult(PerformInteract(payload)); }
                 catch (Exception ex) { tcs.TrySetException(ex); }

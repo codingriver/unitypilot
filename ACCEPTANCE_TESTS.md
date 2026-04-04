@@ -31,6 +31,32 @@
 **预期:** 步骤2 `ok=true`，payload 含 `refreshed=true`；若编译成功含 `compiled=true` 与 compile 摘要；步骤3 `status=ready`
 **判定:** 无需切换 Unity 焦点即可在步骤2–3内完成导入与编译；且步骤2–3为**本轮仅此一次**的强制同步
 
+### 编译状态同步（实现说明）
+
+- **Bridge 推送**：`compile.started` / `compile.finished`（`unity_compile` / `compile.request` 发起时）、`compile.pipeline.started` / `compile.pipeline.finished`（任意脚本编译，含在编辑器内触发的编译）；仍保留原有 `compile.status` / `compile.errors`。
+- **Python**：维护 `_compile_idle_event`，上述事件会更新 `StateStore` 与 idle 信号；`unity_compile_wait` 默认先 `wait_for_compile_idle`（短窗口），再以**指数退避**轮询 `resource.editorState`。
+- **单命令阻塞**：`unity_compile_wait_editor` → Bridge `compile.wait`，在编辑器主线程轮询直至 `EditorApplication.isCompiling == false`。
+
+### T-COMPILE-01: unity_compile_wait（事件 + 退避）
+```
+调用: unity_compile_wait(timeoutS=60, pollIntervalS=1, preferEvents=true)
+（可在触发编译后调用）
+```
+**预期:** `status=ready`，`waitMode` 为 `immediate`、`event`、`event+poll` 或 `poll` 之一  
+**判定:** 非 `timeout`；`preferEvents=false` 时仅轮询，仍应 `ready`（若编译已结束）
+
+### T-COMPILE-02: unity_compile_wait_editor
+```
+步骤:
+1. unity_compile() 或保存脚本触发编译
+2. unity_compile_wait_editor(timeoutMs=120000)
+```
+**预期:** `ok=true`，payload 含 `state=compile_idle` 或等价成功字段  
+**判定:** 与 `EditorApplication.isCompiling` 一致
+
+### T-COMPILE-03: 事件名称（调试）
+在 Bridge / MCP 日志中可观察到：`compile.pipeline.started` → … → `compile.pipeline.finished`，以及 MCP 触发的 `compile.started` / `compile.finished`（顺序以实际为准）。
+
 ---
 
 ## P2: unity_csharp_execute 引用修复

@@ -150,7 +150,7 @@ namespace codingriver.unity.pilot
 
                 // Import into AssetDatabase on main thread
                 var tcs = new TaskCompletionSource<bool>();
-                _bridge.MainThreadQueue.Enqueue(() =>
+                _bridge.EnqueueTracked(id, () =>
                 {
                     try
                     {
@@ -200,7 +200,7 @@ namespace codingriver.unity.pilot
 
                 // Re-import on main thread
                 var tcs = new TaskCompletionSource<bool>();
-                _bridge.MainThreadQueue.Enqueue(() =>
+                _bridge.EnqueueTracked(id, () =>
                 {
                     try
                     {
@@ -238,7 +238,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

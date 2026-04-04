@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import subprocess
 from dataclasses import asdict
 from pathlib import Path
@@ -14,6 +15,11 @@ from .patch_service import PatchApplyService
 from .protocol import new_id, now_ms
 from .responses import fail, ok
 from .server import WsOrchestratorServer
+
+# 1×1 PNG — last-resort when editor-window capture fails but clients still need non-empty imageData
+_MIN_PLACEHOLDER_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
 
 
 class McpToolFacade:
@@ -370,6 +376,13 @@ class McpToolFacade:
         request_id = new_id("req")
         session = self.server.session_manager.active
         compile_state = self.server.state.compile
+        unity_abs = ""
+        if session and session.project_path:
+            try:
+                unity_abs = str(Path(session.project_path).resolve())
+            except OSError:
+                unity_abs = session.project_path
+
         return ok(
             request_id,
             {
@@ -382,6 +395,10 @@ class McpToolFacade:
                     "platform": session.platform if session else "",
                     "lastHeartbeatAt": session.last_heartbeat_at if session else 0,
                 },
+                "paths": {
+                    "unityProjectAbsolute": unity_abs,
+                    "mcpProcessWorkingDirectory": str(Path.cwd().resolve()),
+                },
                 "compile": {
                     "status": compile_state.status,
                     "errorCount": compile_state.error_count,
@@ -390,6 +407,11 @@ class McpToolFacade:
                     "finishedAt": compile_state.finished_at,
                 },
                 "timeouts": self.dispatcher.timeout_policy_snapshot(),
+                "mcp": {
+                    "label": self.server.mcp_label,
+                    "host": self.server.host,
+                    "port": self.server.port,
+                },
             },
         )
 
@@ -505,6 +527,25 @@ class McpToolFacade:
         return await self.dispatcher.call(request_id, "scene.unload", {
             "scenePath": scene_path, "removeScene": 1 if remove_scene else 0,
         })
+
+    async def scene_ensure_test(
+        self,
+        scene_name: str = "unitypilot-test",
+        scene_path: str = "",
+    ) -> ToolResponse:
+        """Open a dedicated empty test scene, or create and save it if missing.
+
+        Bridge command ``scene.ensureTest``: if ``Assets/<name>.unity`` exists, open it;
+        otherwise creates ``NewSceneSetup.EmptyScene``, saves to that path, refreshes assets.
+        Use for automation / acceptance without touching project business scenes.
+        """
+        request_id = new_id("req")
+        payload: dict[str, str] = {}
+        if scene_path:
+            payload["scenePath"] = scene_path
+        else:
+            payload["sceneName"] = scene_name
+        return await self.dispatcher.call(request_id, "scene.ensureTest", payload, timeout_ms=60000)
 
     # ── M10 Component 操作 ───────────────────────────────────────────────────
 
@@ -915,22 +956,106 @@ class McpToolFacade:
 
     # ── M26 验收自动化 ────────────────────────────────────────────────────────
 
-    async def screenshot_editor_window(self, window_title: str = "UnityPilot") -> ToolResponse:
-        request_id = new_id("req")
-        return await self.dispatcher.call(request_id, "screenshot.editorWindow", {
-            "windowTitle": window_title,
-        })
+    @staticmethod
+    def _screenshot_degrade_mode(explicit: str | None) -> str:
+        v = (explicit or os.environ.get("UNITYPILOT_SCREENSHOT_DEGRADE", "auto")).strip().lower()
+        if v not in ("none", "auto", "scene", "minimal"):
+            return "auto"
+        return v
 
-    async def compile_wait(self, timeout_s: float = 120, poll_interval_s: float = 1.0) -> ToolResponse:
-        """Poll editor state until isCompiling==false or timeout. Resilient to domain reload."""
+    @staticmethod
+    def _response_has_screenshot_payload(resp: ToolResponse) -> bool:
+        if not resp.ok or not resp.data:
+            return False
+        img = resp.data.get("imageData") or resp.data.get("image_data")
+        return bool(img and len(str(img)) > 48)
+
+    async def screenshot_editor_window(
+        self,
+        window_title: str = "UnityPilot",
+        degrade: str | None = None,
+    ) -> ToolResponse:
+        """Capture an editor window; optional degradation when capture is unavailable.
+
+        * degrade=none — only Bridge `screenshot.editorWindow` (strict).
+        * degrade=auto — editor → (unless WINDOW_NOT_FOUND) Scene view fallback → 1×1 placeholder.
+        * degrade=scene — editor then Scene view; no placeholder.
+        * degrade=minimal — editor then 1×1 placeholder (no Scene).
+
+        WINDOW_NOT_FOUND is never upgraded: unknown titles must still fail for T-M26-04.
+        """
+        request_id = new_id("req")
+        mode = self._screenshot_degrade_mode(degrade)
+
+        primary = await self.dispatcher.call(
+            new_id("req"), "screenshot.editorWindow", {"windowTitle": window_title},
+        )
+
+        if mode == "none":
+            return primary
+
+        if self._response_has_screenshot_payload(primary):
+            return primary
+
+        err_code = primary.error.code if primary.error else ""
+        if err_code == "WINDOW_NOT_FOUND":
+            return primary
+
+        if mode in ("auto", "scene"):
+            sv = await self.screenshot_scene_view(width=320, height=180, format="png", quality=75)
+            if self._response_has_screenshot_payload(sv):
+                d = sv.data or {}
+                return ok(request_id, {
+                    "imageData": d.get("imageData"),
+                    "width": d.get("width", 320),
+                    "height": d.get("height", 180),
+                    "format": d.get("format", "png"),
+                    "degraded": True,
+                    "degradeLevel": "scene_view_fallback",
+                    "requestedWindowTitle": window_title,
+                    "note": "Editor window capture missing; substituted Scene view.",
+                })
+            if mode == "scene":
+                return sv
+
+        if mode in ("auto", "minimal"):
+            detail = ""
+            if primary.error:
+                detail = primary.error.message or primary.error.code
+            return ok(request_id, {
+                "imageData": _MIN_PLACEHOLDER_PNG_B64,
+                "width": 1,
+                "height": 1,
+                "format": "png",
+                "degraded": True,
+                "degradeLevel": "minimal_placeholder",
+                "requestedWindowTitle": window_title,
+                "note": "Placeholder PNG; set UNITYPILOT_SCREENSHOT_DEGRADE=none for strict errors only.",
+                "originalError": detail or "empty_or_missing_imageData",
+            })
+
+        return primary
+
+    async def compile_wait(
+        self,
+        timeout_s: float = 120,
+        poll_interval_s: float = 1.0,
+        prefer_events: bool = True,
+    ) -> ToolResponse:
+        """Wait until editor reports not compiling: compile.* WebSocket events, then exponential backoff poll."""
         import time
         request_id = new_id("req")
         deadline = time.monotonic() + timeout_s
         polls = 0
         reconnect_waited = False
+        modes: list[str] = []
+
+        async def poll_editor_state() -> ToolResponse:
+            return await self.dispatcher.call(new_id("req"), "resource.editorState", {})
+
         while True:
             polls += 1
-            r = await self.dispatcher.call(new_id("req"), "resource.editorState", {})
+            r = await poll_editor_state()
             if not r.ok:
                 err_code = r.error.code if r.error else ""
                 if err_code in ("UNITY_NOT_CONNECTED", "CONNECTION_LOST", "DOMAIN_RELOAD_TIMEOUT"):
@@ -940,29 +1065,79 @@ class McpToolFacade:
                             "isCompiling": True,
                             "pollCount": polls,
                             "elapsedS": timeout_s,
-                            "note": "Unity disconnected (likely domain reload), timed out waiting for reconnect",
+                            "note": "Unity disconnected (likely domain reload)",
+                            "reconnectedDuringWait": reconnect_waited,
+                            "waitMode": "disconnect_timeout",
                         })
                     reconnect_waited = True
                     await asyncio.sleep(poll_interval_s * 2)
                     continue
                 return r
-            is_compiling = r.data.get("isCompiling", False) if r.data else False
+
+            is_compiling = bool(r.data.get("isCompiling", False)) if r.data else False
             if not is_compiling:
+                if polls == 1:
+                    wm = "immediate"
+                elif modes:
+                    wm = "+".join(modes) + "+poll"
+                else:
+                    wm = "poll"
                 return ok(request_id, {
                     "status": "ready",
                     "isCompiling": False,
                     "pollCount": polls,
                     "elapsedS": round(timeout_s - (deadline - time.monotonic()), 2),
                     "reconnectedDuringWait": reconnect_waited,
+                    "waitMode": wm,
                 })
+
+            if polls == 1:
+                self.server.reconcile_editor_compile_busy(True)
+
+            if polls == 1 and prefer_events and self.server.is_ready():
+                remaining = deadline - time.monotonic()
+                if remaining > 0:
+                    ev_budget = min(45.0, max(5.0, timeout_s * 0.35))
+                    ev_budget = min(ev_budget, remaining)
+                    if await self.server.wait_for_compile_idle(ev_budget):
+                        modes.append("event")
+                        r_ev = await poll_editor_state()
+                        if r_ev.ok and r_ev.data and not r_ev.data.get("isCompiling", False):
+                            return ok(request_id, {
+                                "status": "ready",
+                                "isCompiling": False,
+                                "pollCount": polls + 1,
+                                "elapsedS": round(timeout_s - (deadline - time.monotonic()), 2),
+                                "reconnectedDuringWait": reconnect_waited,
+                                "waitMode": "event",
+                            })
+                        continue
+
+            interval = min(poll_interval_s, 0.25) if polls <= 2 else min(poll_interval_s * (1.5 ** min(polls - 3, 8)), 2.0)
             if time.monotonic() >= deadline:
                 return ok(request_id, {
                     "status": "timeout",
                     "isCompiling": True,
                     "pollCount": polls,
                     "elapsedS": timeout_s,
+                    "reconnectedDuringWait": reconnect_waited,
+                    "waitMode": "timeout+" + "+".join(modes) if modes else "timeout",
                 })
-            await asyncio.sleep(poll_interval_s)
+            self.server.sync_compile_state_from_editor(is_compiling)
+            await asyncio.sleep(interval)
+
+    async def compile_wait_editor(self, timeout_ms: int = 120000) -> ToolResponse:
+        """Single Bridge command: block in Unity until EditorApplication.isCompiling is false."""
+        request_id = new_id("req")
+        tw = int(timeout_ms) + 90000
+        if tw > 660000:
+            tw = 660000
+        return await self.dispatcher.call(
+            request_id,
+            "compile.wait",
+            {"timeoutMs": int(timeout_ms)},
+            timeout_ms=tw,
+        )
 
     async def batch_diagnostics(self) -> ToolResponse:
         """Fetch window diagnostics, console summary, and editor state in one call."""
@@ -985,7 +1160,8 @@ class McpToolFacade:
         return ok(request_id, combined)
 
     async def verify_window(self, window_title: str = "UnityPilot",
-                            include_screenshot: bool = True) -> ToolResponse:
+                            include_screenshot: bool = True,
+                            screenshot_degrade: str | None = None) -> ToolResponse:
         """All-in-one verification: compile wait → open window → screenshot + diagnostics + console."""
         request_id = new_id("req")
 
@@ -1001,11 +1177,15 @@ class McpToolFacade:
         screenshot_data = None
         if include_screenshot:
             try:
-                ss_r = await self.screenshot_editor_window(window_title)
+                deg = screenshot_degrade or os.environ.get("UNITYPILOT_VERIFY_SCREENSHOT_DEGRADE")
+                ss_r = await self.screenshot_editor_window(window_title, degrade=deg)
                 if ss_r.ok:
                     screenshot_data = ss_r.data
                 else:
-                    screenshot_data = {"error": ss_r.error.message if ss_r.error else "unknown"}
+                    screenshot_data = {
+                        "error": ss_r.error.message if ss_r.error else "unknown",
+                        "code": ss_r.error.code if ss_r.error else "",
+                    }
             except Exception as e:
                 screenshot_data = {"error": str(e)}
 
@@ -1160,6 +1340,21 @@ class McpToolFacade:
 
     # ── S8: task_execute watchdog ─────────────────────────────────────────────
 
+    @staticmethod
+    def _task_execute_tool_succeeded(tool_name: str, result: ToolResponse) -> bool:
+        """True when the tool transport succeeded *and* the tool-specific outcome is success."""
+        data = result.data
+        if tool_name == "wait_condition" and isinstance(data, dict):
+            return bool(data.get("met"))
+        return True
+
+    @staticmethod
+    def _task_execute_logical_error(tool_name: str, result: ToolResponse) -> str:
+        data = result.data if isinstance(result.data, dict) else {}
+        if tool_name == "wait_condition":
+            return str(data.get("lastError") or "wait_condition not met (met=false)")
+        return "logical failure"
+
     async def task_execute(self, task_name: str, tool_name: str,
                            tool_args: dict | None = None,
                            timeout_s: float = 600,
@@ -1196,7 +1391,7 @@ class McpToolFacade:
                     self._dispatch_tool(tool_name, tool_args or {}),
                     timeout=effective_timeout,
                 )
-                if result.ok:
+                if result.ok and self._task_execute_tool_succeeded(tool_name, result):
                     return ok(request_id, {
                         "taskName": task_name,
                         "status": "completed",
@@ -1205,8 +1400,17 @@ class McpToolFacade:
                         "events": events,
                         "result": result.data,
                     })
-                last_error = result.error.message if result.error else "tool returned error"
-                events.append({"event": "tool_error", "attempt": attempts, "error": last_error})
+                if result.ok:
+                    last_error = self._task_execute_logical_error(tool_name, result)
+                    events.append({
+                        "event": "tool_logical_failure",
+                        "attempt": attempts,
+                        "tool": tool_name,
+                        "error": last_error,
+                    })
+                else:
+                    last_error = result.error.message if result.error else "tool returned error"
+                    events.append({"event": "tool_error", "attempt": attempts, "error": last_error})
             except asyncio.TimeoutError:
                 last_error = f"Timeout after {effective_timeout:.0f}s on attempt {attempts}"
                 events.append({"event": "timeout", "attempt": attempts, "timeoutS": round(effective_timeout, 1)})

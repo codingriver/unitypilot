@@ -22,7 +22,9 @@ namespace codingriver.unity.pilot
         // ── Layout ────────────────────────────────────────────────────────────
         private Vector2 _logScroll;
         private Vector2 _diagScroll;
+        private Vector2 _opLogScroll;
         private bool    _autoScroll = true;
+        private bool    _opAutoScroll = true;
         private double  _lastRepaint;
 
         // ── GUI event-stable snapshots (Layout -> Repaint) ───────────────────
@@ -46,6 +48,12 @@ namespace codingriver.unity.pilot
         private MessageType _toastType = MessageType.Info;
         private double _toastExpireAt;
 
+        // ── Operation log tab ──────────────────────────────────────────────
+        private bool _opFilterAll   = true;
+        private bool _opFilterFail  = false;
+        private bool _opFilterStuck = false;
+        private List<OperationLogEntry> _guiOpLogsSnapshot = new();
+
         private string _wsHostInput = "127.0.0.1";
         private int _wsPortInput = 8765;
 
@@ -54,6 +62,11 @@ namespace codingriver.unity.pilot
         private GUIStyle _styleWarn;
         private GUIStyle _styleError;
         private GUIStyle _styleBox;
+        private Texture2D _texCardError;
+        private Texture2D _texCardStuck;
+        private Texture2D _texCardActive;
+        /// <summary>连接状态面板：与 Inspector 一致，略收紧内边距；行间间距用标准 vertical spacing。</summary>
+        private GUIStyle _styleBoxConnection;
         private GUIStyle _styleLogCard;
         private bool     _stylesInit;
 
@@ -117,6 +130,11 @@ namespace codingriver.unity.pilot
                 padding = new RectOffset(8, 8, 6, 6),
                 margin  = new RectOffset(4, 4, 2, 2),
             };
+            _styleBoxConnection = new GUIStyle(GUI.skin.box)
+            {
+                padding = new RectOffset(8, 8, 4, 4),
+                margin  = new RectOffset(4, 4, 2, 2),
+            };
             _styleInfo = new GUIStyle(EditorStyles.label)
             {
                 fontSize = 11,
@@ -131,6 +149,19 @@ namespace codingriver.unity.pilot
                 padding = new RectOffset(10, 10, 8, 8),
                 margin  = new RectOffset(6, 6, 0, 12),
             };
+
+            _texCardError = MakeSolidTex(new Color(0.4f, 0.1f, 0.1f, 0.3f));
+            _texCardStuck = MakeSolidTex(new Color(0.5f, 0.35f, 0.05f, 0.3f));
+            _texCardActive = MakeSolidTex(new Color(0.1f, 0.3f, 0.5f, 0.2f));
+        }
+
+        private static Texture2D MakeSolidTex(Color c)
+        {
+            var t = new Texture2D(1, 1);
+            t.SetPixel(0, 0, c);
+            t.Apply();
+            t.hideFlags = HideFlags.HideAndDontSave;
+            return t;
         }
 
         // ─────────────────────────────────── GUI ──────────────────────────────
@@ -150,6 +181,7 @@ namespace codingriver.unity.pilot
                 _guiDiagResultSnapshot   = _diagResult;
                 _guiDiagRunningSnapshot  = _diagRunning;
                 _guiDiagResultAtMsSnapshot = _diagResultAtMs;
+                _guiOpLogsSnapshot       = UnityPilotOperationTracker.Instance.GetEntriesCopy();
             }
 
             DrawTopStatusOverview(_guiStatusSnapshot);
@@ -157,7 +189,7 @@ namespace codingriver.unity.pilot
 
             EditorGUILayout.Space(4);
             int prevTab = _activeTab;
-            _activeTab = GUILayout.Toolbar(_activeTab, new[] { "运行状态", "诊断日志" });
+            _activeTab = GUILayout.Toolbar(_activeTab, new[] { "运行状态", "诊断日志", "操作日志" });
             if (_activeTab != prevTab)
                 EditorPrefs.SetInt("UnityPilot.ActiveTab", _activeTab);
             EditorGUILayout.Space(4);
@@ -169,9 +201,14 @@ namespace codingriver.unity.pilot
                 UnityPilotLogsTabDiagnostics.ClearNotOnLogsTab();
                 DrawRuntimeTab(bridge, _guiStatusSnapshot, _guiDiagResultSnapshot, _guiDiagRunningSnapshot, _guiDiagResultAtMsSnapshot);
             }
-            else
+            else if (_activeTab == 1)
             {
                 DrawLogsTab(bridge, _guiLogsSnapshot);
+            }
+            else
+            {
+                UnityPilotLogsTabDiagnostics.ClearNotOnLogsTab();
+                DrawOperationLogTab(_guiOpLogsSnapshot);
             }
         }
 
@@ -244,6 +281,229 @@ namespace codingriver.unity.pilot
 
                 UnityPilotLogsTabDiagnostics.RecordLogsTab(position.width, scrollViewportW, labelMaxW, _logScroll);
                 UnityPilotWindowDiagnostics.RecordSection("logScroll", labelMaxW, scrollViewportW);
+            }
+        }
+
+        // ── Operation Log Tab ──────────────────────────────────────────────
+
+        private void DrawOperationLogTab(List<OperationLogEntry> entries)
+        {
+            var tabMaxW = Mathf.Max(100f, position.width);
+            using (new EditorGUILayout.VerticalScope(_styleBox, GUILayout.MaxWidth(tabMaxW)))
+            {
+                DrawOperationLogToolbar(entries);
+
+                float logHeight = Mathf.Clamp(position.height * 0.72f, 240f, 800f);
+
+                var vBarW = GUI.skin.verticalScrollbar.fixedWidth > 0f
+                    ? GUI.skin.verticalScrollbar.fixedWidth
+                    : 15f;
+                var scrollViewportW = Mathf.Max(80f, position.width - 28f - vBarW);
+                var labelMaxW = Mathf.Max(60f, scrollViewportW - 28f);
+
+                _opLogScroll = EditorGUILayout.BeginScrollView(
+                    _opLogScroll,
+                    false,
+                    true,
+                    GUIStyle.none,
+                    GUI.skin.verticalScrollbar,
+                    GUI.skin.scrollView,
+                    GUILayout.Height(logHeight),
+                    GUILayout.MaxWidth(tabMaxW));
+
+                using (new EditorGUILayout.VerticalScope(GUILayout.MaxWidth(scrollViewportW)))
+                {
+                    foreach (var entry in entries)
+                    {
+                        if (!ShouldShowOpEntry(entry)) continue;
+                        DrawOperationLogCard(entry, labelMaxW);
+                    }
+                }
+
+                EditorGUILayout.EndScrollView();
+
+                if (_opAutoScroll && entries.Count > 0)
+                    _opLogScroll = new Vector2(0, float.MaxValue);
+            }
+        }
+
+        private void DrawOperationLogToolbar(List<OperationLogEntry> entries)
+        {
+            var tracker = UnityPilotOperationTracker.Instance;
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField("操作日志", EditorStyles.boldLabel, GUILayout.Width(52));
+                GUILayout.FlexibleSpace();
+
+                var statsStyle = EditorStyles.miniLabel;
+                var active = tracker.ActiveCount;
+                var total  = tracker.TotalCount;
+                var failed = tracker.FailedCount;
+                var stuck  = tracker.StuckCount;
+
+                var statsColor = (stuck > 0 || failed > 0) ? new Color(1f, 0.5f, 0.3f) : Color.white;
+                var prevColor = GUI.color;
+                GUI.color = statsColor;
+                EditorGUILayout.LabelField(
+                    $"活跃:{active}  总计:{total}  失败:{failed}  卡住:{stuck}",
+                    statsStyle, GUILayout.Width(200));
+                GUI.color = prevColor;
+            }
+
+            EditorGUILayout.Space(2);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                _opFilterAll   = GUILayout.Toggle(_opFilterAll,   "全部",       EditorStyles.miniButtonLeft, GUILayout.Width(40));
+                _opFilterFail  = GUILayout.Toggle(_opFilterFail,  "仅失败",     EditorStyles.miniButtonMid,  GUILayout.Width(44));
+                _opFilterStuck = GUILayout.Toggle(_opFilterStuck, "仅卡住",     EditorStyles.miniButtonRight, GUILayout.Width(44));
+
+                if (_opFilterFail || _opFilterStuck) _opFilterAll = false;
+                if (!_opFilterFail && !_opFilterStuck) _opFilterAll = true;
+
+                GUILayout.FlexibleSpace();
+
+                if (GUILayout.Button("打开日志文件", EditorStyles.miniButton, GUILayout.Width(88)))
+                {
+                    tracker.RevealLogFile();
+                    ShowToast("已定位到 " + UnityPilotOperationTracker.LogFilePath);
+                }
+
+                _opAutoScroll = GUILayout.Toggle(_opAutoScroll, "自动滚动", EditorStyles.miniButton, GUILayout.Width(60));
+
+                if (GUILayout.Button("清除", EditorStyles.miniButton, GUILayout.Width(36)))
+                {
+                    tracker.ClearEntries();
+                    ShowToast("操作日志已清除");
+                }
+            }
+
+            EditorGUILayout.Space(2);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                var bridge = UnityPilotBridge.Instance;
+                var autoRestart = bridge.AutoRestartOnCriticalStuck;
+                var newAutoRestart = GUILayout.Toggle(autoRestart, "临界超时自动重启", EditorStyles.miniButton, GUILayout.Width(110));
+                if (newAutoRestart != autoRestart)
+                    bridge.AutoRestartOnCriticalStuck = newAutoRestart;
+
+                GUILayout.FlexibleSpace();
+
+                var prevColor = GUI.color;
+                GUI.color = new Color(1f, 0.6f, 0.6f);
+                if (GUILayout.Button("强制重启 Unity", EditorStyles.miniButton, GUILayout.Width(100)))
+                {
+                    if (EditorUtility.DisplayDialog("确认操作", "确定要强制关闭并重启当前 Unity 项目吗？\n未保存的更改将丢失！", "确定", "取消"))
+                    {
+                        UnityPilotBridge.ForceRestartUnityEditor();
+                    }
+                }
+                GUI.color = prevColor;
+            }
+        }
+
+        private bool ShouldShowOpEntry(OperationLogEntry entry)
+        {
+            if (_opFilterAll) return true;
+            if (_opFilterFail && (entry.Phase == "failed" || entry.Phase == "agent_error" || entry.Phase == "critical")) return true;
+            if (_opFilterStuck && entry.IsStuck) return true;
+            if (_opFilterFail && entry.Phase == "disconnected") return true;
+            return false;
+        }
+
+        private void DrawOperationLogCard(OperationLogEntry entry, float maxW)
+        {
+            var isError  = entry.Phase == "failed" || entry.Phase == "agent_error" || entry.Phase == "critical";
+            var isStuck  = entry.IsStuck;
+            var isSystem = entry.Phase == "system" || entry.Phase == "stopped" || entry.Phase == "disconnected";
+            var isActive = !entry.CompletedAt.HasValue && entry.Phase != "agent_error" && !isSystem;
+
+            var cardStyle = new GUIStyle(_styleLogCard);
+            if (isError)
+                cardStyle.normal.background = _texCardError;
+            else if (isStuck)
+                cardStyle.normal.background = _texCardStuck;
+            else if (isActive)
+                cardStyle.normal.background = _texCardActive;
+
+            using (new EditorGUILayout.VerticalScope(cardStyle))
+            {
+                // Header line: time + description + elapsed/status
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    var timeStr = entry.ReceivedAt.ToString("HH:mm:ss.fff");
+                    string statusIcon;
+                    if (isError) statusIcon = "✗";
+                    else if (isStuck) statusIcon = "⚠";
+                    else if (isActive) statusIcon = "⏳";
+                    else if (entry.Phase == "disconnected") statusIcon = "⚡";
+                    else if (isSystem) statusIcon = "●";
+                    else statusIcon = "✓";
+
+                    var headerStyle = new GUIStyle(EditorStyles.boldLabel) { fontSize = 11 };
+                    if (isError) headerStyle.normal.textColor = new Color(1f, 0.35f, 0.35f);
+                    else if (isStuck) headerStyle.normal.textColor = new Color(1f, 0.78f, 0.15f);
+                    else if (entry.Phase == "disconnected") headerStyle.normal.textColor = new Color(1f, 0.6f, 0.3f);
+                    else if (isSystem) headerStyle.normal.textColor = new Color(0.5f, 0.8f, 1f);
+
+                    EditorGUILayout.LabelField(
+                        $"{statusIcon} {timeStr}  {entry.Description}",
+                        headerStyle, GUILayout.MaxWidth(maxW * 0.65f));
+
+                    GUILayout.FlexibleSpace();
+
+                    if (entry.CompletedAt.HasValue)
+                    {
+                        EditorGUILayout.LabelField($"[{entry.ElapsedMs}ms]",
+                            EditorStyles.miniLabel, GUILayout.Width(80));
+                    }
+                    else if (isActive)
+                    {
+                        var elapsed = (long)(DateTime.Now - entry.ReceivedAt).TotalMilliseconds;
+                        EditorGUILayout.LabelField($"⏳ {elapsed / 1000.0:F1}s",
+                            EditorStyles.miniLabel, GUILayout.Width(80));
+                    }
+                }
+
+                // Command name + id
+                EditorGUILayout.LabelField(
+                    $"  cmd: {entry.CommandName}  id: {entry.CommandId}",
+                    _styleInfo, GUILayout.MaxWidth(maxW));
+
+                // Step records
+                List<OperationStepRecord> steps;
+                lock (entry.Steps) steps = new List<OperationStepRecord>(entry.Steps);
+
+                foreach (var step in steps)
+                {
+                    var stepTime = step.Time.ToString("HH:mm:ss.fff");
+                    var stepText = step.Detail != null
+                        ? $"  ├ {stepTime}  {step.Step} | {step.Detail}"
+                        : $"  ├ {stepTime}  {step.Step}";
+
+                    GUIStyle stepStyle;
+                    if (step.Step.StartsWith("⚠") || step.Step.StartsWith("失败") || step.Step.Contains("Agent上报"))
+                        stepStyle = step.Step.StartsWith("失败") ? _styleError : _styleWarn;
+                    else
+                        stepStyle = _styleInfo;
+
+                    EditorGUILayout.LabelField(stepText, stepStyle, GUILayout.MaxWidth(maxW));
+                }
+
+                // Progress bar (if applicable)
+                if (entry.Progress >= 0 && isActive)
+                {
+                    var rect = GUILayoutUtility.GetRect(0, 14, GUILayout.MaxWidth(maxW - 20));
+                    EditorGUI.ProgressBar(rect, entry.Progress / 100f, $"{entry.Progress}%");
+                }
+
+                // Error info
+                if (isError && !string.IsNullOrEmpty(entry.ErrorMessage))
+                {
+                    EditorGUILayout.LabelField(
+                        $"  └ {entry.ErrorCode}: {entry.ErrorMessage}",
+                        _styleError, GUILayout.MaxWidth(maxW));
+                }
             }
         }
 
@@ -429,40 +689,73 @@ namespace codingriver.unity.pilot
 
         private void DrawConnectionSection(BridgeStatus status)
         {
-            using (new EditorGUILayout.VerticalScope(_styleBox))
+            InitStyles();
+            // var prevVs = EditorGUIUtility.standardVerticalSpacing;
+            // EditorGUIUtility.standardVerticalSpacing = 2f;
+            try
             {
-                EditorGUILayout.LabelField("连接状态", EditorStyles.boldLabel);
-                DrawRow("WS 连接",    status.IsWsOpen        ? "✓ 已连接" : "✗ 未连接", status.IsWsOpen);
-                DrawRow("已认证",      status.IsAuthenticated ? "✓ 是"     : "✗ 否",     status.IsAuthenticated);
-                DrawRow("Session ID", string.IsNullOrEmpty(status.SessionId) ? "—" : status.SessionId, true);
+                using (new EditorGUILayout.VerticalScope(_styleBoxConnection))
+                {
+                    EditorGUILayout.LabelField("连接状态", EditorStyles.boldLabel);
+                    DrawRow("WS 连接", status.IsWsOpen ? "✓ 已连接" : "✗ 未连接", status.IsWsOpen);
+                    DrawRow("已认证", status.IsAuthenticated ? "✓ 是" : "✗ 否", status.IsAuthenticated);
+                    {
+                        var pathUi = NormalizeMcpWorkspacePathForUi(status.McpWorkspaceAbsolutePath);
+                        if (status.IsAuthenticated && !string.IsNullOrEmpty(pathUi))
+                            DrawMcpWorkspaceRow("MCP 工作区", pathUi, true);
+                        else
+                            DrawRow("MCP 工作区", "—", false);
+                    }
+                    DrawRow("Session ID", string.IsNullOrEmpty(status.SessionId) ? "—" : status.SessionId, true);
+                    {
+                        string mcpVal;
+                        bool mcpOk;
+                        if (status.IsAuthenticated)
+                        {
+                            var ep = $"ws://{status.McpServerHost}:{status.McpServerPort}";
+                            mcpVal = string.IsNullOrEmpty(status.McpLabel) ? ep : $"{status.McpLabel}  ·  {ep}";
+                            mcpOk = true;
+                        }
+                        else
+                        {
+                            mcpVal = "—";
+                            mcpOk = false;
+                        }
+                        DrawRow("MCP 服务", mcpVal, mcpOk);
+                    }
 
-                string hbText;
-                bool hbOk;
-                if (!status.IsStarted)
-                {
-                    hbText = "未启动";
-                    hbOk = false;
-                }
-                else if (!status.IsWsOpen)
-                {
-                    hbText = "未连接";
-                    hbOk = false;
-                }
-                else if (status.LastHeartbeatSentAt <= 0)
-                {
-                    hbText = "等待首个心跳";
-                    hbOk = true;
-                }
-                else
-                {
-                    var elapsedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - status.LastHeartbeatSentAt;
-                    if (elapsedMs < 1000)
-                        hbText = "< 1 s 前";
+                    string hbText;
+                    bool hbOk;
+                    if (!status.IsStarted)
+                    {
+                        hbText = "未启动";
+                        hbOk = false;
+                    }
+                    else if (!status.IsWsOpen)
+                    {
+                        hbText = "未连接";
+                        hbOk = false;
+                    }
+                    else if (status.LastHeartbeatSentAt <= 0)
+                    {
+                        hbText = "等待首个心跳";
+                        hbOk = true;
+                    }
                     else
-                        hbText = $"{elapsedMs / 1000.0:F1} s 前";
-                    hbOk = elapsedMs < 5000;
+                    {
+                        var elapsedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - status.LastHeartbeatSentAt;
+                        if (elapsedMs < 1000)
+                            hbText = "< 1 s 前";
+                        else
+                            hbText = $"{elapsedMs / 1000.0:F1} s 前";
+                        hbOk = elapsedMs < 5000;
+                    }
+                    DrawRow("上次心跳", hbText, hbOk);
                 }
-                DrawRow("上次心跳", hbText, hbOk);
+            }
+            finally
+            {
+                // EditorGUIUtility.standardVerticalSpacing = prevVs;
             }
         }
 
@@ -473,7 +766,6 @@ namespace codingriver.unity.pilot
             using (new EditorGUILayout.VerticalScope(_styleBox))
             {
                 EditorGUILayout.LabelField("诊断 / 通信测试", EditorStyles.boldLabel);
-                EditorGUILayout.BeginHorizontal();
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     using (new EditorGUI.DisabledScope(diagRunning))
@@ -485,10 +777,7 @@ namespace codingriver.unity.pilot
                             ShowToast("已执行服务器测试");
                         }
                     }
-                }
-                
-                using (new EditorGUILayout.HorizontalScope())
-                {
+
                     using (new EditorGUI.DisabledScope(diagRunning))
                     {
                         if (GUILayout.Button("检查服务器", GUILayout.Height(22)))
@@ -497,10 +786,7 @@ namespace codingriver.unity.pilot
                             ShowToast("已执行服务器检查");
                         }
                     }
-                }
-                
-                using (new EditorGUILayout.HorizontalScope())
-                {
+
                     using (new EditorGUI.DisabledScope(diagRunning))
                     {
                         var prev = GUI.color;
@@ -517,7 +803,6 @@ namespace codingriver.unity.pilot
                         GUI.color = prev;
                     }
                 }
-                EditorGUILayout.EndHorizontal();
 
                 if (!string.IsNullOrEmpty(diagResult))
                 {
@@ -623,15 +908,46 @@ namespace codingriver.unity.pilot
 
         // ── Helpers ───────────────────────────────────────────────────────────
 
-        private static void DrawRow(string label, string value, bool ok)
+        private void DrawRow(string label, string value, bool ok)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(label, GUILayout.Width(96), GUILayout.ExpandHeight(false));
+                var prev = GUI.color;
+                GUI.color = ok ? Color.white : new Color(1f, 0.6f, 0.4f);
+                float maxW = Mathf.Max(60f, position.width - 96f - 40f);
+                // var style = new GUIStyle(EditorStyles.label) { wordWrap = true };
+                var style =EditorStyles.label;
+                EditorGUILayout.LabelField(value ?? "", style, GUILayout.MaxWidth(maxW));
+                GUI.color = prev;
+            }
+        }
+
+        /// <summary>Trim、统一 Windows 下路径分隔符，便于单行/多行 Label 展示。</summary>
+        private static string NormalizeMcpWorkspacePathForUi(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+                return "";
+            var s = raw.Trim();
+            if (Application.platform == RuntimePlatform.WindowsEditor)
+                s = s.Replace('/', '\\');
+            return s;
+        }
+
+        /// <summary>MCP 工作区路径：单行 Horizontal，右侧 Label 换行；不再套 VerticalScope，避免额外行距。</summary>
+        private static void DrawMcpWorkspaceRow(string label, string value, bool ok)
         {
             using (new EditorGUILayout.HorizontalScope())
             {
                 EditorGUILayout.LabelField(label, GUILayout.Width(96));
                 var prev = GUI.color;
                 GUI.color = ok ? Color.white : new Color(1f, 0.6f, 0.4f);
-                EditorGUILayout.SelectableLabel(value,
-                    GUILayout.Height(EditorGUIUtility.singleLineHeight));
+                var style = new GUIStyle(EditorStyles.label)
+                {
+                    wordWrap = true,
+                    margin  = new RectOffset(0, 0, 0, 0),
+                };
+                EditorGUILayout.LabelField(value ?? "", style, GUILayout.ExpandWidth(true));
                 GUI.color = prev;
             }
         }
@@ -661,11 +977,12 @@ namespace codingriver.unity.pilot
                 var line = raw ?? string.Empty;
                 if (string.IsNullOrWhiteSpace(line)) continue;
 
-                var style = line.StartsWith("✗") || line.StartsWith("异常") || line.StartsWith("检查失败")
+                var baseStyle = line.StartsWith("✗") || line.StartsWith("异常") || line.StartsWith("检查失败")
                     ? _styleError
                     : line.StartsWith("✓")
                         ? _styleInfo
                         : _styleWarn;
+                var style = new GUIStyle(baseStyle) { wordWrap = true };
 
                 EditorGUILayout.LabelField($"[{ts:HH:mm:ss.fff}] {line}", style);
             }

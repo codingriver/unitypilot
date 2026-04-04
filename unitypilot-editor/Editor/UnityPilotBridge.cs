@@ -6,6 +6,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Net.WebSockets;
 using System.Security.Cryptography;
@@ -16,6 +17,7 @@ using UnityEditor;
 using UnityEditor.Compilation;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Debug = UnityEngine.Debug;
 
 namespace codingriver.unity.pilot
 {
@@ -30,6 +32,13 @@ namespace codingriver.unity.pilot
         public bool IsCompiling;
         public int  LastErrorCount;
         public string PlayModeState;
+        /// <summary>服务端 session.hello 返回的可选 MCP 显示名（与 Cursor mcpServers 中 --label 一致）。</summary>
+        public string McpLabel;
+        /// <summary>服务端 ack 中的监听地址（与 MCP 进程实际一致）。</summary>
+        public string McpServerHost;
+        public int McpServerPort;
+        /// <summary>MCP 服务端进程工作区绝对路径（与 Cursor 工程目录一致，由服务端 ack 提供）。</summary>
+        public string McpWorkspaceAbsolutePath;
     }
 
     // ── Log entry ───────────────────────────────────────────────────────────────
@@ -158,6 +167,7 @@ namespace codingriver.unity.pilot
         private const int    HeartbeatIntervalMs = 2000;
         private const int    MaxLogEntries    = 1000;
         private const string DebugLogPrefsKey = "UnityPilot.DebugWireLogs";
+        private const string AutoRestartPrefsKey = "UnityPilot.AutoRestartOnStuck";
 
         private static readonly Lazy<UnityPilotBridge> Lazy = new(() => new UnityPilotBridge());
         public static UnityPilotBridge Instance => Lazy.Value;
@@ -199,18 +209,25 @@ namespace codingriver.unity.pilot
         private ClientWebSocket      _ws;
         private CancellationTokenSource _cts;
         private string               _sessionId;
+        private string               _mcpLabelFromServer = "";
+        private string               _mcpHostFromServer = "";
+        private int                  _mcpPortFromServer;
+        private string               _mcpWorkspacePathFromServer = "";
         private bool                 _started;
         private bool                 _isAuthenticated;
         private long                 _lastHeartbeatSentAt;
         private string               _activeSceneName = string.Empty;
+        private long                 _pipelineCompileStartUtcMs;
         private string               _wsHost = DefaultWsHost;
         private int                  _wsPort = DefaultWsPort;
         private bool                 _debugWireLogsEnabled;
+        private bool                 _autoRestartOnCriticalStuck;
 
         private UnityPilotBridge()
         {
             LoadWsEndpointFromEditorPrefs();
             _debugWireLogsEnabled = EditorPrefs.GetBool(DebugLogPrefsKey, false);
+            _autoRestartOnCriticalStuck = EditorPrefs.GetBool(AutoRestartPrefsKey, false);
             RegisterLegacyCommands();
             RegisterModuleServices();
         }
@@ -265,6 +282,18 @@ namespace codingriver.unity.pilot
             }
         }
 
+        public bool AutoRestartOnCriticalStuck
+        {
+            get => _autoRestartOnCriticalStuck;
+            set
+            {
+                if (_autoRestartOnCriticalStuck == value) return;
+                _autoRestartOnCriticalStuck = value;
+                EditorPrefs.SetBool(AutoRestartPrefsKey, value);
+                AddLog("info", value ? "临界超时自动重启已开启" : "临界超时自动重启已关闭");
+            }
+        }
+
         /// <summary>
         /// 更新 WebSocket 地址并写入 <see cref="EditorPrefs"/>。
         /// 键为 <c>UnityPilot.WsHost.{项目路径哈希}</c> / <c>UnityPilot.WsPort.{项目路径哈希}</c>，按工程区分。
@@ -289,6 +318,10 @@ namespace codingriver.unity.pilot
             IsCompiling         = _compileService.IsCompiling,
             LastErrorCount      = _compileService.LastErrorCount,
             PlayModeState       = _playInputService.CurrentPlayModeChangedPayload().state,
+            McpLabel            = _mcpLabelFromServer ?? "",
+            McpServerHost       = string.IsNullOrEmpty(_mcpHostFromServer) ? _wsHost : _mcpHostFromServer,
+            McpServerPort       = _mcpPortFromServer > 0 ? _mcpPortFromServer : _wsPort,
+            McpWorkspaceAbsolutePath = _mcpWorkspacePathFromServer ?? "",
         };
 
         public List<BridgeLogEntry> GetLogsCopy()
@@ -303,6 +336,8 @@ namespace codingriver.unity.pilot
 
         public void Restart()
         {
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.bridge.restart", "Bridge重启", "手动触发重启");
             Stop();
             EnsureStarted();
         }
@@ -323,11 +358,16 @@ namespace codingriver.unity.pilot
             AssemblyReloadEvents.beforeAssemblyReload += OnBeforeAssemblyReload;
             AssemblyReloadEvents.afterAssemblyReload += OnAfterAssemblyReload;
             AddLog("info", "Bridge 已启动，准备连接 " + GetServerUrl());
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.bridge.start", "Bridge启动",
+                $"sessionId={_sessionId} endpoint={GetServerUrl()}");
             _ = ConnectLoopAsync(_cts.Token);
         }
 
         public void Stop()
         {
+            var wasAuthenticated = _isAuthenticated;
+            var wasWsOpen = _ws?.State == WebSocketState.Open;
             try
             {
                 _cts?.Cancel();
@@ -344,13 +384,19 @@ namespace codingriver.unity.pilot
                 _started = false;
                 _isAuthenticated = false;
                 _lastHeartbeatSentAt = 0;
+                ClearMcpServerDisplayState();
                 AddLog("info", "Bridge 已停止");
+                UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                    "sys.bridge.stop", "Bridge停止",
+                    $"原因=手动停止 连接状态={(wasWsOpen ? "已连接" : "未连接")} 认证状态={(wasAuthenticated ? "已认证" : "未认证")}",
+                    "stopped");
             }
         }
 
+        private double _lastWatchdogCheck;
+
         private void ProcessMainThreadQueue()
         {
-            // Cache scene name while on main thread
             _activeSceneName = SceneManager.GetActiveScene().name;
 
             while (_mainThreadQueue.TryDequeue(out var action))
@@ -358,30 +404,104 @@ namespace codingriver.unity.pilot
                 try { action(); }
                 catch (Exception ex) { Debug.LogError($"[UnityPilotBridge] main thread error: {ex}"); }
             }
+
+            // Watchdog: scan every 2 seconds
+            if (EditorApplication.timeSinceStartup - _lastWatchdogCheck > 2.0)
+            {
+                _lastWatchdogCheck = EditorApplication.timeSinceStartup;
+                var tracker = UnityPilotOperationTracker.Instance;
+                var stuckCommands = tracker.RunWatchdog();
+                foreach (var cmd in stuckCommands)
+                    AddLog("warn", $"[看门狗] 操作卡住: {cmd}");
+
+                // Critical stuck detection: auto-restart if enabled
+                if (_autoRestartOnCriticalStuck)
+                {
+                    var critical = tracker.GetCriticallyStuckCommandIds();
+                    if (critical.Count > 0)
+                    {
+                        AddLog("error", $"[看门狗] {critical.Count} 个操作超过临界超时，准备强制重启 Unity");
+                        _autoRestartOnCriticalStuck = false;
+                        ForceRestartUnityEditor();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 替代 <c>MainThreadQueue.Enqueue</c>，自动追踪"排队等待主线程→主线程执行中→主线程执行完毕"。
+        /// </summary>
+        internal void EnqueueTracked(string commandId, Action action)
+        {
+            var ctx = UnityPilotOperationTracker.Instance.GetContext(commandId);
+            ctx?.Step("排队等待主线程");
+
+            _mainThreadQueue.Enqueue(() =>
+            {
+                ctx?.Step("主线程执行中");
+                try
+                {
+                    action();
+                    ctx?.Step("主线程执行完毕");
+                }
+                catch (Exception ex)
+                {
+                    ctx?.Fail("MAIN_THREAD_ERROR", ex.Message);
+                    throw;
+                }
+            });
         }
 
         private async Task ConnectLoopAsync(CancellationToken token)
         {
+            var tracker = UnityPilotOperationTracker.Instance;
             while (!token.IsCancellationRequested)
             {
                 try
                 {
+                    var wasAuthenticated = _isAuthenticated;
                     _isAuthenticated = false;
+                    ClearMcpServerDisplayState();
                     _ws = new ClientWebSocket();
                     var serverUrl = GetServerUrl();
                     AddLog("info", $"正在连接 {serverUrl} …");
                     await _ws.ConnectAsync(new Uri(serverUrl), token);
                     AddLog("info", "WS 已连接，发送 session.hello");
+
+                    // 连接成功 → 写入操作日志
+                    tracker.RecordSystemEvent(
+                        "sys.ws.connected", "WS连接成功",
+                        $"endpoint={serverUrl} sessionId={_sessionId}");
+
                     await SendHelloAsync(token);
 
                     var recvTask = ReceiveLoopAsync(token);
                     var hbTask = HeartbeatLoopAsync(token);
-                    await Task.WhenAny(recvTask, hbTask);
-                    AddLog("warn", "WS 连接断开，等待重连");
+                    var completedTask = await Task.WhenAny(recvTask, hbTask);
+
+                    // 分析断开原因
+                    var disconnectReason = AnalyzeDisconnectReason(recvTask, hbTask, completedTask, token);
+                    AddLog("warn", $"WS 连接断开: {disconnectReason}");
+
+                    if (wasAuthenticated || _isAuthenticated)
+                    {
+                        tracker.RecordSystemEvent(
+                            "sys.auth.lost", "认证丢失",
+                            $"原因=连接断开 详情={disconnectReason}",
+                            "disconnected");
+                    }
+
+                    tracker.RecordSystemEvent(
+                        "sys.ws.disconnected", "WS连接断开",
+                        $"原因={disconnectReason} endpoint={serverUrl} wsState={_ws?.State}",
+                        "disconnected");
+
+                    _isAuthenticated = false;
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
+                    // 重连失败 → 只写通信日志，不写操作日志（太频繁）
                     AddLog("warn", $"连接失败：{ex.Message}");
                     Debug.LogWarning($"[UnityPilotBridge] connect failed: {ex.Message}");
                 }
@@ -389,6 +509,47 @@ namespace codingriver.unity.pilot
                 if (!token.IsCancellationRequested)
                     await Task.Delay(ReconnectMs, token).ConfigureAwait(false);
             }
+        }
+
+        private string AnalyzeDisconnectReason(Task recvTask, Task hbTask, Task completedTask, CancellationToken token)
+        {
+            if (token.IsCancellationRequested)
+                return "Bridge主动停止(CancellationToken)";
+
+            if (completedTask == recvTask)
+            {
+                if (recvTask.IsFaulted)
+                {
+                    var ex = recvTask.Exception?.InnerException ?? recvTask.Exception;
+                    if (ex is WebSocketException wsEx)
+                        return $"WebSocket接收异常: {wsEx.WebSocketErrorCode} — {wsEx.Message}";
+                    return $"接收循环异常: {ex?.Message}";
+                }
+                if (recvTask.IsCanceled)
+                    return "接收循环被取消";
+
+                // recvTask completed normally → server closed or WS state changed
+                var wsState = _ws?.State;
+                if (wsState == WebSocketState.CloseReceived || wsState == WebSocketState.Closed)
+                    return $"服务端主动关闭连接(wsState={wsState})";
+                return $"接收循环正常退出(wsState={wsState}，可能服务端断开)";
+            }
+
+            if (completedTask == hbTask)
+            {
+                if (hbTask.IsFaulted)
+                {
+                    var ex = hbTask.Exception?.InnerException ?? hbTask.Exception;
+                    if (ex is WebSocketException wsEx)
+                        return $"心跳发送失败: {wsEx.WebSocketErrorCode} — {wsEx.Message}";
+                    return $"心跳循环异常: {ex?.Message}";
+                }
+                if (hbTask.IsCanceled)
+                    return "心跳循环被取消";
+                return $"心跳循环退出(wsState={_ws?.State}，可能WS已关闭)";
+            }
+
+            return "未知断开原因";
         }
 
         private async Task SendHelloAsync(CancellationToken token)
@@ -431,6 +592,27 @@ namespace codingriver.unity.pilot
             }
         }
 
+        private void ClearMcpServerDisplayState()
+        {
+            _mcpLabelFromServer = "";
+            _mcpHostFromServer = "";
+            _mcpPortFromServer = 0;
+            _mcpWorkspacePathFromServer = "";
+        }
+
+        private string FormatMcpServerHintForLog()
+        {
+            var host = string.IsNullOrEmpty(_mcpHostFromServer) ? _wsHost : _mcpHostFromServer;
+            var port = _mcpPortFromServer > 0 ? _mcpPortFromServer : _wsPort;
+            var endpoint = $"{host}:{port}";
+            var head = !string.IsNullOrEmpty(_mcpLabelFromServer)
+                ? $"MCP「{_mcpLabelFromServer}」· {endpoint}"
+                : $"MCP {endpoint}";
+            if (!string.IsNullOrEmpty(_mcpWorkspacePathFromServer))
+                return $"{head}  |  工作区 {_mcpWorkspacePathFromServer}";
+            return head;
+        }
+
         private async Task ReceiveLoopAsync(CancellationToken token)
         {
             var buffer = new byte[65536];
@@ -443,7 +625,16 @@ namespace codingriver.unity.pilot
                 do
                 {
                     result = await _ws.ReceiveAsync(new ArraySegment<byte>(buffer), token);
-                    if (result.MessageType == WebSocketMessageType.Close) return;
+                    if (result.MessageType == WebSocketMessageType.Close)
+                    {
+                        var closeStatus = result.CloseStatus?.ToString() ?? "Unknown";
+                        var closeDesc = result.CloseStatusDescription ?? "";
+                        UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                            "sys.ws.close.received", "收到服务端关闭帧",
+                            $"CloseStatus={closeStatus} Description={closeDesc}",
+                            "disconnected");
+                        return;
+                    }
                     sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
                 } while (!result.EndOfMessage);
 
@@ -462,8 +653,24 @@ namespace codingriver.unity.pilot
             // Handle hello result → authenticate
             if (envelope.type == "result" && envelope.name == "session.hello")
             {
+                var ack = JsonUtility.FromJson<HelloAckMessage>(json);
+                if (ack?.payload != null)
+                {
+                    _mcpLabelFromServer = ack.payload.mcpLabel ?? "";
+                    _mcpHostFromServer = ack.payload.mcpHost ?? "";
+                    _mcpPortFromServer = ack.payload.mcpPort;
+                    _mcpWorkspacePathFromServer = ack.payload.mcpWorkingDirectory ?? "";
+                }
+                else
+                {
+                    ClearMcpServerDisplayState();
+                }
+
                 _isAuthenticated = true;
-                AddLog("info", $"认证成功，sessionId={_sessionId}");
+                AddLog("info", $"认证成功，sessionId={_sessionId}  |  {FormatMcpServerHintForLog()}");
+                UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                    "sys.auth.success", "认证成功",
+                    $"sessionId={_sessionId} {FormatMcpServerHintForLog()}");
                 _ = SendEditorStateEventAsync(token);
                 return;
             }
@@ -497,10 +704,13 @@ namespace codingriver.unity.pilot
         private void RegisterLegacyCommands()
         {
             _router.Register("compile.request",   HandleCompileRequestAsync);
+            _router.Register("compile.wait",      HandleCompileWaitAsync);
             _router.Register("compile.errors.get", HandleCompileErrorsGetAsync);
             _router.Register("playmode.set",       HandlePlayModeSetAsync);
             _router.Register("mouse.event",        HandleMouseEventAsync);
             _router.Register("editor.state",       HandleEditorStateAsync);
+            _router.Register("agent.reportError",  HandleAgentReportErrorAsync);
+            _router.Register("editor.forceRestart", HandleForceRestartAsync);
         }
 
         private void RegisterModuleServices()
@@ -574,6 +784,7 @@ namespace codingriver.unity.pilot
 
         private async Task HandleCompileRequestAsync(string id, string json, CancellationToken token)
         {
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
             var command = JsonUtility.FromJson<CompileRequestMessage>(json);
             var requestId = command?.payload?.requestId ?? string.Empty;
 
@@ -583,10 +794,10 @@ namespace codingriver.unity.pilot
                 await SendErrorAsync(id, "EDITOR_BUSY", "编译进行中，请稍后重试", token, "compile.request");
                 return;
             }
+            opCtx?.Step("参数校验通过，准备触发编译");
 
-            // Schedule compile start on main thread; TCS resolves when action executes
             var startTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _mainThreadQueue.Enqueue(() =>
+            EnqueueTracked(id, () =>
             {
                 if (!_compileService.TryBeginCompile(requestId))
                 {
@@ -609,7 +820,22 @@ namespace codingriver.unity.pilot
                 $"evt-compile-status-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
                 "compile.status", startedPayload, token);
 
-            // Wait for compile to finish (120 s timeout)
+            var lifeStarted = new CompileLifecyclePayload
+            {
+                phase = "started",
+                requestId = requestId,
+                source = "mcp",
+                startedAt = startedPayload.startedAt,
+                finishedAt = 0,
+                errorCount = 0,
+                warningCount = 0,
+                durationMs = 0,
+            };
+            await SendEventAsync(
+                $"evt-compile-started-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "compile.started", lifeStarted, token);
+
+            opCtx?.Step("等待编译完成", "超时120s");
             var compileTask = _compileService.WaitForCompileAsync();
             var timeoutTask = Task.Delay(TimeSpan.FromSeconds(120), token);
             var winner = await Task.WhenAny(compileTask, timeoutTask);
@@ -619,11 +845,29 @@ namespace codingriver.unity.pilot
                 return;
             }
 
-            // Report "finished" + errors
+            opCtx?.Step("编译完成，发送结果");
             var finishedPayload = _compileService.BuildFinishedStatusPayload(requestId);
             await SendEventAsync(
                 $"evt-compile-status-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
                 "compile.status", finishedPayload, token);
+
+            var dur = finishedPayload.finishedAt > 0 && finishedPayload.startedAt > 0
+                ? finishedPayload.finishedAt - finishedPayload.startedAt
+                : 0L;
+            var lifeFinished = new CompileLifecyclePayload
+            {
+                phase = "finished",
+                requestId = requestId,
+                source = "mcp",
+                startedAt = finishedPayload.startedAt,
+                finishedAt = finishedPayload.finishedAt,
+                errorCount = finishedPayload.errorCount,
+                warningCount = finishedPayload.warningCount,
+                durationMs = dur,
+            };
+            await SendEventAsync(
+                $"evt-compile-finished-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                "compile.finished", lifeFinished, token);
 
             var errorsPayload = _compileService.BuildCompileErrorsPayload(requestId);
             await SendEventAsync(
@@ -640,6 +884,58 @@ namespace codingriver.unity.pilot
             await SendResultAsync(id, "compile.errors.get", payload, token);
         }
 
+        /// <summary>
+        /// Wait until EditorApplication reports no script compilation (any source). Polls on main thread via EditorApplication.update.
+        /// </summary>
+        private async Task HandleCompileWaitAsync(string id, string json, CancellationToken token)
+        {
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
+            var command = JsonUtility.FromJson<CompileWaitMessage>(json);
+            var timeoutMs = command?.payload?.timeoutMs ?? 120000;
+            if (timeoutMs < 1000) timeoutMs = 1000;
+            if (timeoutMs > 600000) timeoutMs = 600000;
+            opCtx?.Step("等待编译空闲", $"timeout={timeoutMs}ms");
+
+            var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var stop = false;
+
+            void PollIdle()
+            {
+                if (stop) return;
+                if (!EditorApplication.isCompiling && !_compileService.IsCompiling)
+                {
+                    EditorApplication.update -= PollIdle;
+                    tcs.TrySetResult(true);
+                }
+            }
+
+            EnqueueTracked(id, () =>
+            {
+                if (!EditorApplication.isCompiling && !_compileService.IsCompiling)
+                {
+                    tcs.TrySetResult(true);
+                    return;
+                }
+
+                EditorApplication.update += PollIdle;
+                PollIdle();
+            });
+
+            var delayTask = Task.Delay(TimeSpan.FromMilliseconds(timeoutMs), token);
+            var winner = await Task.WhenAny(tcs.Task, delayTask);
+            stop = true;
+            _mainThreadQueue.Enqueue(() => { EditorApplication.update -= PollIdle; });
+
+            if (winner == delayTask)
+            {
+                await SendErrorAsync(id, "COMMAND_TIMEOUT", $"等待编译结束超时（{timeoutMs}ms）", token, "compile.wait");
+                return;
+            }
+
+            await SendResultAsync(id, "compile.wait",
+                new GenericOkPayload { ok = true, state = "compile_idle", status = "ready" }, token);
+        }
+
         private async Task HandlePlayModeSetAsync(string id, string json, CancellationToken token)
         {
             var command = JsonUtility.FromJson<PlayModeSetMessage>(json);
@@ -652,7 +948,7 @@ namespace codingriver.unity.pilot
             }
 
             var resultTcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _mainThreadQueue.Enqueue(() =>
+            EnqueueTracked(id, () =>
             {
                 var payload = _playInputService.SetPlayMode(action);
                 resultTcs.TrySetResult(payload);
@@ -676,7 +972,7 @@ namespace codingriver.unity.pilot
             }
 
             var resultTcs = new TaskCompletionSource<GenericOkPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _mainThreadQueue.Enqueue(() =>
+            EnqueueTracked(id, () =>
             {
                 var result = _playInputService.HandleMouseEvent(mousePayload);
                 resultTcs.TrySetResult(result);
@@ -698,6 +994,117 @@ namespace codingriver.unity.pilot
             await SendResultAsync(id, "editor.state", payload, token);
         }
 
+        // ──────────────────────────────── Agent error ingestion ────────────────────────
+
+        [Serializable] internal class AgentReportErrorMessage { public AgentReportErrorPayload payload; }
+        [Serializable]
+        internal class AgentReportErrorPayload
+        {
+            public string source = "agent";
+            public string errorType = "";
+            public string message = "";
+            public string relatedCommandId = "";
+            public string context = "";
+        }
+
+        private async Task HandleAgentReportErrorAsync(string id, string json, CancellationToken token)
+        {
+            var msg = JsonUtility.FromJson<AgentReportErrorMessage>(json);
+            var p   = msg?.payload ?? new AgentReportErrorPayload();
+
+            UnityPilotOperationTracker.Instance.IngestAgentError(
+                p.source, p.errorType, p.message, p.relatedCommandId, p.context);
+            AddLog("warn", $"[Agent上报] [{p.errorType}] {p.message}");
+
+            await SendResultAsync(id, "agent.reportError", new GenericOkPayload { ok = true }, token);
+        }
+
+        // ──────────────────────────────── Force restart ──────────────────────────────
+
+        private async Task HandleForceRestartAsync(string id, string json, CancellationToken token)
+        {
+            AddLog("warn", "收到 editor.forceRestart 命令，即将强制重启编辑器");
+            await SendResultAsync(id, "editor.forceRestart", new GenericOkPayload { ok = true }, token);
+
+            _mainThreadQueue.Enqueue(() =>
+            {
+                ForceRestartUnityEditor();
+            });
+        }
+
+        /// <summary>
+        /// 强制重启 Unity 编辑器：先杀掉当前进程再重新打开项目。
+        /// 创建一个外部脚本来完成杀进程和重启。
+        /// </summary>
+        internal static void ForceRestartUnityEditor()
+        {
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.force.restart", "强制重启Unity",
+                $"project={Application.dataPath} pid={System.Diagnostics.Process.GetCurrentProcess().Id}",
+                "critical");
+
+            try
+            {
+                var projectPath = Path.GetDirectoryName(Application.dataPath);
+                var unityExePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (string.IsNullOrEmpty(unityExePath))
+                {
+                    Debug.LogError("[UnityPilot] 无法获取 Unity 编辑器路径，放弃重启");
+                    return;
+                }
+
+                var pid = System.Diagnostics.Process.GetCurrentProcess().Id;
+
+#if UNITY_EDITOR_WIN
+                var restartScript = Path.Combine(Path.GetTempPath(), $"unitypilot_restart_{pid}.bat");
+                var scriptContent =
+                    $"@echo off\r\n" +
+                    $"echo [UnityPilot] Waiting for Unity (PID {pid}) to exit...\r\n" +
+                    $"taskkill /F /PID {pid} >nul 2>&1\r\n" +
+                    $"timeout /t 3 /nobreak >nul\r\n" +
+                    $"echo [UnityPilot] Restarting Unity project: {projectPath}\r\n" +
+                    $"\"{unityExePath}\" -projectPath \"{projectPath}\"\r\n" +
+                    $"del \"%~f0\"\r\n";
+                File.WriteAllText(restartScript, scriptContent, Encoding.Default);
+
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "cmd.exe",
+                    Arguments = $"/c \"{restartScript}\"",
+                    UseShellExecute = true,
+                    CreateNoWindow = true,
+                    WindowStyle = System.Diagnostics.ProcessWindowStyle.Hidden,
+                };
+                System.Diagnostics.Process.Start(psi);
+#else
+                var restartScript = Path.Combine(Path.GetTempPath(), $"unitypilot_restart_{pid}.sh");
+                var scriptContent =
+                    $"#!/bin/bash\n" +
+                    $"echo '[UnityPilot] Waiting for Unity (PID {pid}) to exit...'\n" +
+                    $"kill -9 {pid} 2>/dev/null\n" +
+                    $"sleep 3\n" +
+                    $"echo '[UnityPilot] Restarting Unity project: {projectPath}'\n" +
+                    $"\"{unityExePath}\" -projectPath \"{projectPath}\" &\n" +
+                    $"rm -f \"$0\"\n";
+                File.WriteAllText(restartScript, scriptContent, Encoding.UTF8);
+
+                var psi = new System.Diagnostics.ProcessStartInfo
+                {
+                    FileName = "/bin/bash",
+                    Arguments = restartScript,
+                    UseShellExecute = false,
+                    CreateNoWindow = true,
+                };
+                System.Diagnostics.Process.Start(psi);
+#endif
+                Debug.LogWarning($"[UnityPilot] 重启脚本已启动，Unity 即将关闭");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogError($"[UnityPilot] 强制重启失败: {ex.Message}");
+            }
+        }
+
         // ──────────────────────────────── Send helpers ────────────────────────────────
 
         internal async Task SendResultAsync<TPayload>(string id, string name, TPayload payload, CancellationToken token)
@@ -711,6 +1118,7 @@ namespace codingriver.unity.pilot
                 sessionId = _sessionId,
             };
             await SendJsonAsync(JsonUtility.ToJson(result), token);
+            UnityPilotOperationTracker.Instance.GetContext(id)?.MarkReported(false);
         }
 
         internal async Task SendEventAsync<TPayload>(string id, string name, TPayload payload, CancellationToken token)
@@ -743,6 +1151,7 @@ namespace codingriver.unity.pilot
                 sessionId = _sessionId,
             };
             await SendJsonAsync(JsonUtility.ToJson(err), token);
+            UnityPilotOperationTracker.Instance.GetContext(id)?.MarkReported(true);
         }
 
         private async Task SendEditorStateEventAsync(CancellationToken token)
@@ -781,6 +1190,9 @@ namespace codingriver.unity.pilot
 
         private void OnPlayModeStateChanged(PlayModeStateChange change)
         {
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.playmode.changed", "PlayMode状态变更",
+                $"state={change}");
             if (_cts == null || _cts.IsCancellationRequested) return;
             _ = SendPlayModeChangedEventAsync(_cts.Token);
         }
@@ -788,6 +1200,9 @@ namespace codingriver.unity.pilot
         private void OnBeforeAssemblyReload()
         {
             AddLog("info", "Domain Reload 即将开始，发送 domain_reload.starting 事件");
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.domain.reload.start", "Domain Reload开始",
+                $"ws={(_ws?.State == WebSocketState.Open ? "连接中" : "未连接")} 认证={(_isAuthenticated ? "是" : "否")} 编译={(_compileService.IsCompiling ? "是" : "否")}");
             if (_ws?.State == WebSocketState.Open && _isAuthenticated)
             {
                 try
@@ -822,15 +1237,51 @@ namespace codingriver.unity.pilot
         private void OnAfterAssemblyReload()
         {
             AddLog("info", "Domain Reload 完成");
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.domain.reload.done", "Domain Reload完成",
+                $"Bridge={(_started ? "运行中" : "已停止")}");
         }
 
         private void OnCompilationStarted(object _)
         {
+            _pipelineCompileStartUtcMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             AddLog("info", "Unity 开始编译");
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.compile.start", "Unity编译开始",
+                $"ws={(_ws?.State == WebSocketState.Open ? "连接中" : "未连接")}");
+            var tok = _cts?.Token ?? CancellationToken.None;
+            _ = SendCompilePipelineEventAsync(
+                "compile.pipeline.started",
+                new CompilePipelinePayload
+                {
+                    phase = "started",
+                    source = "pipeline",
+                    startedAt = _pipelineCompileStartUtcMs,
+                    durationMs = 0,
+                },
+                tok);
         }
 
         private void OnCompilationFinished(object _)
         {
+            var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            var duration = now - _pipelineCompileStartUtcMs;
+            if (duration < 0) duration = 0;
+            UnityPilotOperationTracker.Instance.RecordSystemEvent(
+                "sys.compile.done", "Unity编译完成",
+                $"耗时={duration}ms errors={_compileService.LastErrorCount} ws={(_ws?.State == WebSocketState.Open ? "连接中" : "未连接")}");
+            var tok = _cts?.Token ?? CancellationToken.None;
+            _ = SendCompilePipelineEventAsync(
+                "compile.pipeline.finished",
+                new CompilePipelinePayload
+                {
+                    phase = "finished",
+                    source = "pipeline",
+                    startedAt = _pipelineCompileStartUtcMs,
+                    durationMs = duration,
+                },
+                tok);
+
             var wsOpen = _ws?.State == WebSocketState.Open;
             if (!wsOpen)
             {
@@ -839,7 +1290,24 @@ namespace codingriver.unity.pilot
             }
 
             AddLog("info", "Unity 编译完成，准备发送 compile.errors");
-            _ = SendCompileFinishedSnapshotAsync(_cts?.Token ?? CancellationToken.None);
+            _ = SendCompileFinishedSnapshotAsync(tok);
+        }
+
+        private async Task SendCompilePipelineEventAsync(string eventName, CompilePipelinePayload payload, CancellationToken token)
+        {
+            if (_ws?.State != WebSocketState.Open || !_isAuthenticated) return;
+            try
+            {
+                await SendEventAsync(
+                    $"evt-{eventName}-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}",
+                    eventName,
+                    payload,
+                    token);
+            }
+            catch (Exception ex)
+            {
+                AddLog("warn", $"发送 {eventName} 失败：{ex.Message}");
+            }
         }
 
         private async Task SendCompileFinishedSnapshotAsync(CancellationToken token)

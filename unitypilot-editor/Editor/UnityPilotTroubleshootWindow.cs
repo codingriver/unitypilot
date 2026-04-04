@@ -27,7 +27,7 @@ namespace codingriver.unity.pilot
             "UnityPilot 连接与 MCP 排查（可复制本窗口全部文字）\n\n" +
             "【1】Python MCP 服务\n" +
             "- 确认已运行 run_unitypilot_mcp.py（或 Cursor 已启动 MCP stdio 进程）。\n" +
-            "- 命令行中的 --port 须与 Unity「WS 连接配置」里的端口一致。\n" +
+            "- 命令行中的 --port 须与 Unity「WS 连接配置」里的端口一致；可选 --label「显示名」在 Unity 状态窗口与 Cursor 工具 unity_mcp_status 中区分多实例。\n" +
             "- Windows 防火墙若拦截本机回环，可临时关闭或放行 python。\n\n" +
             "【2】地址与端口\n" +
             "- 默认 ws://127.0.0.1:8765；修改后请先停止 Bridge，再「应用连接地址」，然后「启动/重启」。\n" +

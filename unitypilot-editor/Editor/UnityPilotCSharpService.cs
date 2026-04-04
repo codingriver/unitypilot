@@ -74,6 +74,9 @@ namespace codingriver.unity.pilot
                 return;
             }
 
+            var opCtx = UnityPilotOperationTracker.Instance.GetContext(id);
+            opCtx?.Step("安全检查通过，准备执行C#代码", $"timeout={p.timeoutSeconds}s codeLen={p.code.Length}");
+
             int timeout = Mathf.Clamp(p.timeoutSeconds, 1, 30);
             string execId = Guid.NewGuid().ToString("N").Substring(0, 12);
 
@@ -89,7 +92,7 @@ namespace codingriver.unity.pilot
 
             // Execute on main thread with timeout
             var tcs = new TaskCompletionSource<string>();
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {

@@ -200,7 +200,7 @@ namespace codingriver.unity.pilot
             var goName = string.IsNullOrEmpty(p.name) ? "New GameObject" : p.name;
 
             var tcs = new TaskCompletionSource<GameObjectInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -252,7 +252,7 @@ namespace codingriver.unity.pilot
             var p = msg?.payload ?? new GameObjectFindPayload();
 
             var tcs = new TaskCompletionSource<GameObjectFindResultPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -335,7 +335,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<GameObjectInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -406,7 +406,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -448,7 +448,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<GameObjectInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
@@ -501,7 +501,7 @@ namespace codingriver.unity.pilot
             }
 
             var tcs = new TaskCompletionSource<GameObjectInfoPayload>(TaskCreationOptions.RunContinuationsAsynchronously);
-            _bridge.MainThreadQueue.Enqueue(() =>
+            _bridge.EnqueueTracked(id, () =>
             {
                 try
                 {
